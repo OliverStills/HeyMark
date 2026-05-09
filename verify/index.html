@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Verify Integrity — HeyMark</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; form-action 'none'; base-uri 'none'; frame-ancestors 'none';">
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    .verify-doc { max-width: 680px; margin: 40px auto; font-family: 'JetBrains Mono', monospace; font-size: 13px; line-height: 1.8; color: var(--ink); }
+    .verify-doc h1 { font-family: 'Cormorant Garamond', serif; font-size: 32px; margin-bottom: 8px; }
+    .verify-doc h2 { font-family: 'Cormorant Garamond', serif; font-size: 20px; margin: 28px 0 8px; }
+    .verify-doc p, .verify-doc li { font-family: 'Libre Baskerville', serif; font-size: 14px; line-height: 1.8; margin-bottom: 12px; }
+    .verify-doc ul { padding-left: 22px; }
+    .verify-doc code { font-family: 'JetBrains Mono', monospace; font-size: 12px; background: var(--aged); padding: 1px 5px; border-radius: 2px; }
+    .verify-doc a { color: var(--sepia); }
+    .back-link { display: inline-block; margin-bottom: 24px; font-size: 12px; color: var(--sepia); text-decoration: none; }
+    .back-link:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <header role="banner" style="padding: 32px 0 20px; border-bottom: 1px solid var(--aged); margin-bottom: 24px; text-align:center;">
+    <span class="wordmark"><a href="/" style="text-decoration:none;color:inherit;">HEY<span class="accent">MARK</span></a></span>
+  </header>
+
+  <div class="verify-doc" role="main">
+    <a href="/" class="back-link">← Back to app</a>
+    <h1>Integrity Verification</h1>
+    <p>HeyMark is an open-source, privacy-first PDF to Markdown converter. All PDF parsing, OCR, and conversion happen locally in your browser. No file content is ever transmitted to any server.</p>
+
+    <h2>How to verify using DevTools</h2>
+    <ul>
+      <li>Open HeyMark in your browser, then open DevTools (<code>F12</code> or <code>Cmd+Option+I</code>).</li>
+      <li>Go to the <strong>Network</strong> tab. Make sure "All" is selected.</li>
+      <li>Upload a PDF and perform a conversion.</li>
+      <li>Verify that <strong>all requests</strong> go only to <code>heymark.pages.dev</code> (or your custom domain). There should be zero requests to any third-party origin.</li>
+    </ul>
+
+    <h2>How to verify the app hash</h2>
+    <ul>
+      <li>On the main app page, click <strong>VERIFY</strong> in the footer.</li>
+      <li>The app computes a SHA-256 hash of the loaded HTML and all scripts/styles.</li>
+      <li>It fetches <code>/release-hash.json</code> — a static file deployed alongside each release — and compares the hashes.</li>
+      <li>If they match, the code running in your browser is identical to the published release.</li>
+    </ul>
+
+    <h2>How to verify manually</h2>
+    <ul>
+      <li>Clone the repository: <code>git clone https://github.com/oliverstills/heymark</code></li>
+      <li>Check out the release tag matching the version shown in the footer.</li>
+      <li>Build the project (instructions in <code>BUILD.md</code>) and compare the SHA-256 of the output files to those in the GitHub release notes.</li>
+    </ul>
+
+    <h2>Source code</h2>
+    <p>The full source is published on GitHub under the MIT license. Builds are intended to be reproducible — the binary you run should match what's in the repository.</p>
+    <p><a href="https://github.com/oliverstills/heymark" rel="noopener noreferrer" target="_blank">github.com/oliverstills/heymark ↗</a></p>
+
+    <h2>What this page does NOT protect against</h2>
+    <ul>
+      <li>A compromised host OS or browser extension that intercepts data before it reaches this app.</li>
+      <li>Physical access to your machine.</li>
+      <li>The CDN or hosting provider serving different code than what's in the repository (mitigated by the hash check above).</li>
+    </ul>
+  </div>
+</div>
+</body>
+</html>

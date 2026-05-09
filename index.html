@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HeyMark — PDF to Markdown Converter</title>
+  <meta name="description" content="Convert PDFs to Markdown privately. All processing happens in your browser — your files never leave your device.">
+  <meta name="robots" content="index, follow">
+
+  <!-- CSP — tightened for production; blob: required for pdf.js workers -->
+  <meta http-equiv="Content-Security-Policy" content="
+    default-src 'none';
+    script-src 'self';
+    style-src 'self';
+    font-src 'self';
+    img-src 'self' data: blob:;
+    connect-src 'self';
+    worker-src 'self' blob:;
+    form-action 'none';
+    base-uri 'none';
+    frame-ancestors 'none';
+    object-src 'none';
+  ">
+
+  <link rel="stylesheet" href="/styles.css">
+
+  <!-- UMD libraries — no defer so globals land before the module script runs -->
+  <script src="/vendor/jszip/jszip.min.js"></script>
+  <script src="/vendor/dompurify/purify.min.js"></script>
+  <script src="/vendor/marked/marked.min.js"></script>
+</head>
+<body>
+<div id="app">
+
+  <!-- ===== HEADER ===== -->
+  <header role="banner">
+    <span class="header-rule" aria-hidden="true">— ◆ —</span>
+    <span class="wordmark">HEY<span class="accent">MARK</span></span>
+    <span class="header-rule" aria-hidden="true">— ◆ —</span>
+    <span class="tagline">PDF to Markdown Converter</span>
+    <div class="privacy-badge" role="status" aria-label="Privacy guarantee">
+      <span class="lock-icon" aria-hidden="true">🔒</span>
+      YOUR FILES NEVER LEAVE YOUR BROWSER
+      &nbsp;·&nbsp;
+      <a href="/verify/" aria-label="Verify integrity of this application">VERIFY ↗</a>
+    </div>
+  </header>
+
+  <!-- ===== OPTIONS BAR ===== -->
+  <section id="options-bar" aria-label="Conversion options">
+
+    <div class="toggle-group">
+      <label class="toggle-switch" title="Activate OCR for scanned PDFs">
+        <input type="checkbox" id="opt-ocr" role="switch" aria-checked="false">
+        <span class="toggle-track" aria-hidden="true"></span>
+      </label>
+      <span class="toggle-label" id="opt-ocr-label">OCR Mode</span>
+    </div>
+
+    <div class="toggle-group" id="ocr-lang-group" aria-label="OCR language">
+      <label class="toggle-label" for="opt-lang">Language</label>
+      <select id="opt-lang" class="options-select" aria-label="OCR language">
+        <option value="eng">English</option>
+        <option value="fra">French</option>
+        <option value="deu">German</option>
+        <option value="spa">Spanish</option>
+        <option value="ita">Italian</option>
+        <option value="por">Portuguese</option>
+        <option value="nld">Dutch</option>
+        <option value="pol">Polish</option>
+        <option value="ces">Czech</option>
+        <option value="vie">Vietnamese</option>
+      </select>
+    </div>
+
+    <div class="toggle-group">
+      <label class="toggle-switch" title="Enable table and footnote detection">
+        <input type="checkbox" id="opt-extended" role="switch" aria-checked="false">
+        <span class="toggle-track" aria-hidden="true"></span>
+      </label>
+      <span class="toggle-label">Extended MD</span>
+    </div>
+
+    <div class="toggle-group">
+      <label class="toggle-switch" title="Apply Unicode NFC normalization">
+        <input type="checkbox" id="opt-normalize" checked role="switch" aria-checked="true">
+        <span class="toggle-track" aria-hidden="true"></span>
+      </label>
+      <span class="toggle-label">Normalize Chars</span>
+    </div>
+
+    <div class="toggle-group">
+      <label class="toggle-switch" title="Preserve compound hyphenated words">
+        <input type="checkbox" id="opt-hyphens" checked role="switch" aria-checked="true">
+        <span class="toggle-track" aria-hidden="true"></span>
+      </label>
+      <span class="toggle-label">Preserve Hyphens</span>
+    </div>
+
+  </section>
+
+  <!-- OCR contextual note -->
+  <div id="ocr-note" role="note" hidden>
+    <em>OCR mode uses Tesseract.js — processing may take longer on large or multi-page scanned documents. All computation runs locally.</em>
+  </div>
+
+  <!-- Mobile OCR warning (shown inside queue when needed) -->
+
+  <!-- ===== DROP ZONE ===== -->
+  <section
+    id="drop-zone"
+    role="region"
+    aria-label="File upload area. Drop PDF files here or click to select."
+    tabindex="0"
+  >
+    <input
+      type="file"
+      id="file-input"
+      multiple
+      accept=".pdf,application/pdf"
+      class="sr-only"
+      aria-label="Select PDF files"
+      tabindex="-1"
+    >
+    <h2>Drop your PDFs here</h2>
+    <p class="dz-meta">PDF files only · 50 MB max per file · up to 50 files</p>
+    <div class="dz-buttons">
+      <button class="btn btn-primary" id="select-btn" type="button">Select Files</button>
+      <button class="btn btn-secondary btn-paste" id="paste-btn" type="button">Paste from Clipboard</button>
+    </div>
+  </section>
+
+  <!-- ===== FILE QUEUE ===== -->
+  <section id="file-queue" aria-label="File queue" aria-live="polite" hidden></section>
+
+  <!-- ===== ACTIONS BAR ===== -->
+  <section id="actions-bar" aria-label="Actions" hidden>
+    <div class="actions-left">
+      <button class="btn btn-primary" id="convert-all-btn" type="button">Convert All</button>
+    </div>
+    <div class="actions-right">
+      <button class="btn btn-secondary" id="download-md-btn" type="button" hidden>Download .md</button>
+      <button class="btn btn-secondary" id="download-zip-single-btn" type="button" hidden>Download .zip</button>
+      <button class="btn btn-secondary" id="download-zip-btn" type="button" hidden>Download All as .zip</button>
+      <button class="btn btn-secondary" id="clear-all-btn" type="button">Clear All</button>
+    </div>
+  </section>
+
+  <!-- ===== RESULT PANEL ===== -->
+  <section id="result-panel" aria-label="Conversion result" hidden>
+
+    <div class="result-tabs" role="tablist" aria-label="Result view">
+      <button class="tab-btn" role="tab" id="tab-raw" aria-selected="true" aria-controls="raw-panel" tabindex="0">
+        RAW MARKDOWN
+      </button>
+      <button class="tab-btn" role="tab" id="tab-preview" aria-selected="false" aria-controls="preview-panel" tabindex="-1">
+        PREVIEW
+      </button>
+    </div>
+
+    <div id="file-selector-row" class="file-selector-row" role="toolbar" aria-label="Select file to view" hidden></div>
+
+    <div class="panel-header">
+      <button class="btn" id="copy-btn" type="button" aria-label="Copy markdown to clipboard">COPY</button>
+    </div>
+
+    <div id="raw-panel" role="tabpanel" aria-labelledby="tab-raw" tabindex="0"></div>
+    <div id="preview-panel" role="tabpanel" aria-labelledby="tab-preview" tabindex="0" hidden></div>
+
+  </section>
+
+  <!-- ===== FOOTER ===== -->
+  <footer role="contentinfo">
+    <p>
+      HEYMARK&nbsp;·&nbsp;v1.0.0&nbsp;·&nbsp;ALL PROCESSING IS LOCAL&nbsp;·&nbsp;
+      <button id="verify-btn" class="btn btn-secondary" style="font-size:10px;padding:3px 10px;" type="button">VERIFY</button>
+      &nbsp;·&nbsp;
+      <a href="https://github.com/oliverstills/heymark" rel="noopener noreferrer" target="_blank">SOURCE ↗</a>
+    </p>
+    <div id="verify-panel" hidden role="region" aria-label="Integrity verification">
+      <div class="verify-row">
+        <span class="verify-label">COMPUTED</span>
+        <span class="verify-value" id="verify-computed">—</span>
+      </div>
+      <div class="verify-row">
+        <span class="verify-label">EXPECTED</span>
+        <span class="verify-value" id="verify-expected">—</span>
+      </div>
+      <div class="verify-row">
+        <span class="verify-label">STATUS</span>
+        <span class="verify-value" id="verify-status">—</span>
+      </div>
+      <div class="verify-row">
+        <span class="verify-label">RELEASE</span>
+        <span class="verify-value" id="verify-release">—</span>
+      </div>
+    </div>
+  </footer>
+
+</div><!-- #app -->
+
+<!-- ===== TOAST ===== -->
+<div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+
+<!-- App — loaded as module after UMD globals are available -->
+<script type="module" src="/app.js"></script>
+</body>
+</html>
