@@ -681,19 +681,26 @@ function assembleOutput(name, pageMarkdowns) {
 
 async function convertWithOCR(rec, pdf) {
   const tesseractLib = (await import('/vendor/tesseract/tesseract.esm.min.js')).default;
-  const createWorker = tesseractLib.createWorker.bind(tesseractLib);
+  const createWorker = tesseractLib.createWorker;
 
-  const worker = await createWorker(state.options.lang, 1, {
-    workerPath:  '/vendor/tesseract/worker.min.js',
-    langPath:    '/assets/tessdata/',
-    corePath:    '/vendor/tesseract-core/',
-    logger: m => {
-      if (m.status === 'recognizing text' && m.progress != null) {
-        rec.progress = Math.round(m.progress * 100);
-        renderQueueItem(rec);
-      }
-    },
-  });
+  let worker;
+  try {
+    worker = await createWorker(state.options.lang, 1, {
+      workerPath:  '/vendor/tesseract/worker.min.js',
+      langPath:    '/assets/tessdata/',
+      corePath:    '/vendor/tesseract-core/',
+      logger: m => {
+        console.debug('[Tesseract]', m.status, m.progress ?? '');
+        if (m.status === 'recognizing text' && m.progress != null) {
+          rec.progress = Math.round(m.progress * 100);
+          renderQueueItem(rec);
+        }
+      },
+    });
+  } catch (initErr) {
+    console.error('[Tesseract] Worker init failed:', initErr);
+    throw new Error(`OCR worker failed to initialize: ${initErr?.message || initErr}`);
+  }
 
   rec.worker = worker;
 
