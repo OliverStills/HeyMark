@@ -767,7 +767,7 @@ async function convertWithOCR(rec, pdf) {
   let worker;
   try {
     worker = await createWorker(state.options.lang, 1, {
-      workerPath:  '/vendor/tesseract-core/worker.min.js',
+      workerPath:  '/vendor/tesseract/worker.min.js',
       langPath:    '/assets/tessdata',
       corePath:    '/vendor/tesseract-core/',
       gzip:        false,
