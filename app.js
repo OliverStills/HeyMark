@@ -110,6 +110,17 @@ optOcr.addEventListener('change', () => {
   state.options.ocr = optOcr.checked;
   optOcr.setAttribute('aria-checked', String(optOcr.checked));
   ocrNote.hidden = !optOcr.checked;
+
+  // Re-queue files that failed text extraction so they get a second pass with OCR
+  if (optOcr.checked) {
+    const noTextFiles = state.files.filter(f => f.status === 'no-text');
+    if (noTextFiles.length > 0) {
+      noTextFiles.forEach(f => { f.status = 'queued'; f.markdown = null; f.progress = 0; });
+      renderQueue();
+      updateActionsBar();
+      toast(`${noTextFiles.length} file${noTextFiles.length > 1 ? 's' : ''} re-queued for OCR`);
+    }
+  }
 });
 
 optLang.addEventListener('change', () => { state.options.lang = optLang.value; });
@@ -230,7 +241,7 @@ const STATUS_META = {
   'page-exceeded': { cls: 'status-failed',     label: 'EXCEEDS 2000 PAGES', aria: 'File exceeds 2000 page limit' },
   'invalid-pdf':   { cls: 'status-failed',     label: 'INVALID PDF',        aria: 'Not a valid PDF file' },
   'encrypted':     { cls: 'status-failed',     label: 'PASSWORD REQUIRED',  aria: 'PDF is password protected' },
-  'no-text':       { cls: 'status-complete',   label: 'COMPLETE',           aria: 'Conversion complete' },
+  'no-text':       { cls: 'status-failed',     label: 'NO TEXT — TRY OCR',  aria: 'No text extracted — enable OCR mode and re-convert' },
 };
 
 function renderQueue() {
@@ -347,17 +358,22 @@ function updateActionsBar() {
   const hasAny = state.files.length > 0;
   actionsBar.hidden = !hasAny;
 
-  const completed = state.files.filter(f => f.status === 'complete' || f.status === 'no-text');
+  // only 'complete' files (with actual text) count for downloads
+  const completed = state.files.filter(f => f.status === 'complete');
   const queued    = state.files.filter(f => f.status === 'queued');
 
-  convertAllBtn.hidden    = queued.length === 0;
-  downloadMdBtn.hidden    = completed.length !== 1;
+  convertAllBtn.hidden     = queued.length === 0;
+  downloadMdBtn.hidden     = completed.length !== 1;
   downloadZipSingle.hidden = completed.length !== 1;
-  downloadZipBtn.hidden   = completed.length < 2;
+  downloadZipBtn.hidden    = completed.length < 2;
 
   if (completed.length > 0) {
     resultPanel.hidden = false;
     renderResultPanel();
+  } else {
+    // hide result panel if no successfully extracted files
+    const noTextOnly = state.files.every(f => f.status === 'no-text' || f.status === 'queued' || f.status === 'failed' || f.status === 'cancelled');
+    if (noTextOnly) resultPanel.hidden = true;
   }
 }
 
@@ -377,7 +393,7 @@ function cancelOrRemove(id) {
   } else {
     state.files = state.files.filter(f => f.id !== id);
     // reset activeIdx if needed
-    const completed = state.files.filter(f => f.status === 'complete' || f.status === 'no-text');
+    const completed = state.files.filter(f => f.status === 'complete');
     if (state.activeIdx >= completed.length) state.activeIdx = Math.max(0, completed.length - 1);
   }
   renderQueue();
@@ -804,25 +820,25 @@ function renderQueueItem(rec) {
 // ─── Actions bar buttons ──────────────────────────────────────────────────────
 
 downloadMdBtn.addEventListener('click', () => {
-  const completed = state.files.filter(f => f.status === 'complete' || f.status === 'no-text');
+  const completed = state.files.filter(f => f.status === 'complete');
   if (completed.length !== 1) return;
   downloadSingle(completed[0]);
 });
 
 downloadZipSingle.addEventListener('click', () => {
-  const completed = state.files.filter(f => f.status === 'complete' || f.status === 'no-text');
+  const completed = state.files.filter(f => f.status === 'complete');
   if (completed.length !== 1) return;
   downloadAsZip([completed[0]]);
 });
 
 downloadZipBtn.addEventListener('click', () => {
-  const completed = state.files.filter(f => f.status === 'complete' || f.status === 'no-text');
+  const completed = state.files.filter(f => f.status === 'complete');
   if (completed.length < 2) return;
   downloadAsZip(completed);
 });
 
 clearAllBtn.addEventListener('click', () => {
-  const hasResults = state.files.some(f => f.status === 'complete' || f.status === 'no-text');
+  const hasResults = state.files.some(f => f.status === 'complete');
   if (hasResults && !confirm('Clear all files and results?')) return;
   // terminate any running workers
   for (const rec of state.files) {
@@ -899,7 +915,7 @@ function switchTab(tab) {
 }
 
 function renderResultPanel() {
-  const completed = state.files.filter(f => f.status === 'complete' || f.status === 'no-text');
+  const completed = state.files.filter(f => f.status === 'complete');
   if (completed.length === 0) return;
 
   if (state.activeIdx >= completed.length) state.activeIdx = 0;
@@ -953,7 +969,7 @@ function renderPreview(md) {
 
 // also render preview when switching to it
 tabPreview.addEventListener('click', () => {
-  const completed = state.files.filter(f => f.status === 'complete' || f.status === 'no-text');
+  const completed = state.files.filter(f => f.status === 'complete');
   const rec = completed[state.activeIdx];
   if (rec) renderPreview(rec.markdown || '');
 });
@@ -961,7 +977,7 @@ tabPreview.addEventListener('click', () => {
 // ─── Copy to clipboard ────────────────────────────────────────────────────────
 
 copyBtn.addEventListener('click', async () => {
-  const completed = state.files.filter(f => f.status === 'complete' || f.status === 'no-text');
+  const completed = state.files.filter(f => f.status === 'complete');
   const rec = completed[state.activeIdx];
   if (!rec) return;
   const text = rec.markdown || '';
@@ -991,7 +1007,7 @@ copyBtn.addEventListener('click', async () => {
 // ─── beforeunload warning ─────────────────────────────────────────────────────
 
 window.addEventListener('beforeunload', e => {
-  const hasResults = state.files.some(f => f.status === 'complete' || f.status === 'no-text');
+  const hasResults = state.files.some(f => f.status === 'complete');
   if (hasResults) {
     e.preventDefault();
     e.returnValue = '';
