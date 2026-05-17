@@ -13,6 +13,37 @@ const MAX_PAGES      = 2000;
 const MAX_FILES      = 50;
 const VERSION        = '1.0.0';
 
+// ─── Activity log ─────────────────────────────────────────────────────────────
+const activityEntries = [];
+
+function log(msg, level = 'info') {
+  const now = new Date();
+  const ts  = `${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}.${String(now.getMilliseconds()).padStart(3,'0')}`;
+  activityEntries.push({ ts, msg, level });
+  console[level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'log'](`[HeyMark ${ts}] ${msg}`);
+  flushActivityLog();
+}
+
+function flushActivityLog() {
+  const el = document.getElementById('activity-log');
+  if (!el) return;
+  // only re-render last entry for performance
+  const entry = activityEntries[activityEntries.length - 1];
+  if (!entry) return;
+  const row = document.createElement('div');
+  row.className = 'log-entry';
+  const tsEl = document.createElement('span');
+  tsEl.className = 'log-ts';
+  tsEl.textContent = entry.ts;
+  const msgEl = document.createElement('span');
+  msgEl.className = `log-msg log-${entry.level}`;
+  msgEl.textContent = entry.msg;
+  row.appendChild(tsEl);
+  row.appendChild(msgEl);
+  el.appendChild(row);
+  el.scrollTop = el.scrollHeight;
+}
+
 const COMPOUND_PREFIXES = new Set([
   'court','cross','attorney','work','well','self','anti','ex','non','pre',
   'post','re','sub','co','inter','intra','over','under','out','up','down',
@@ -68,6 +99,22 @@ const previewPanel     = $('preview-panel');
 const verifyBtn        = $('verify-btn');
 const verifyPanelEl    = $('verify-panel');
 const toastEl          = $('toast');
+const activityBtn      = $('activity-btn');
+const activityPanel    = $('activity-panel');
+const activityClearBtn = $('activity-clear-btn');
+
+activityBtn.addEventListener('click', () => {
+  const open = !activityPanel.hidden;
+  activityPanel.hidden = open;
+  activityBtn.setAttribute('aria-expanded', String(!open));
+  activityBtn.textContent = open ? 'Real-Time Activity' : 'Hide Activity';
+  if (!open) activityPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+});
+
+activityClearBtn.addEventListener('click', () => {
+  activityEntries.length = 0;
+  $('activity-log').innerHTML = '';
+});
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
@@ -415,41 +462,50 @@ async function convertFile(rec) {
   rec.error = null;
   renderQueue();
 
+  log(`── Starting: ${rec.name} (${formatSize(rec.size)})`, 'step');
+
   try {
-    // read file bytes
+    log('Reading file bytes…', 'info');
     const buf = await readFileAsArrayBuffer(rec.file);
+    log(`File read: ${buf.byteLength.toLocaleString()} bytes`, 'ok');
 
     // validate magic bytes %PDF-
     const magic = new Uint8Array(buf, 0, 5);
     const isPDF = magic[0]===0x25 && magic[1]===0x50 && magic[2]===0x44 && magic[3]===0x46 && magic[4]===0x2D;
     if (!isPDF) {
+      log('Magic bytes invalid — not a PDF', 'error');
       rec.status = 'invalid-pdf';
       renderQueue();
       updateActionsBar();
       return;
     }
+    log('Magic bytes OK (%PDF-)', 'ok');
 
     // load document
     const loadParams = { data: buf };
     if (rec.password) loadParams.password = rec.password;
 
+    log('Loading PDF with pdf.js…', 'info');
     let pdf;
     try {
       pdf = await pdfjsLib.getDocument(loadParams).promise;
+      log(`pdf.js loaded — ${pdf.numPages} page(s)`, 'ok');
     } catch (err) {
       if (err?.name === 'PasswordException' || err?.code === 1 || err?.code === 2) {
+        log('PDF is password-protected', 'warn');
         rec.status = 'encrypted';
         renderQueue();
         updateActionsBar();
         return;
       }
+      log(`pdf.js load error: ${err?.message}`, 'error');
       throw err;
     }
 
     const numPages = pdf.numPages;
 
-    // page limit check
     if (numPages > MAX_PAGES) {
+      log(`Page count ${numPages} exceeds limit of ${MAX_PAGES}`, 'error');
       rec.status = 'page-exceeded';
       renderQueue();
       updateActionsBar();
@@ -457,6 +513,7 @@ async function convertFile(rec) {
     }
 
     rec.pages = numPages;
+    log(`Mode: ${state.options.ocr ? 'OCR (Tesseract.js)' : 'Standard text extraction'}`, 'step');
 
     let markdown;
     if (state.options.ocr) {
@@ -468,11 +525,13 @@ async function convertFile(rec) {
     rec.markdown = markdown;
     rec.status = markdown.includes('No text could be extracted') ? 'no-text' : 'complete';
     rec.progress = 100;
+    log(`Done — status: ${rec.status}, output: ${markdown.length} chars`, 'ok');
 
   } catch (err) {
-    if (rec.status === 'cancelled') return;
+    if (rec.status === 'cancelled') { log('Cancelled by user', 'warn'); return; }
     rec.status = 'failed';
     rec.error = err?.message || 'Unknown error';
+    log(`FAILED: ${err?.message || err}`, 'error');
     console.error('Conversion error:', err);
   }
 
@@ -498,6 +557,7 @@ async function convertStandard(rec, pdf) {
   for (let i = 1; i <= pdf.numPages; i++) {
     if (rec.status === 'cancelled') return '';
     rec.progress = Math.round((i / pdf.numPages) * 90);
+    log(`Page ${i}/${pdf.numPages}: extracting text…`, 'info');
     renderQueueItem(rec);
     await yield$();
 
@@ -521,11 +581,13 @@ async function convertStandard(rec, pdf) {
 
     const ordered = reconstructReadingOrder(items, viewport);
     const md = buildPageMarkdown(ordered, viewport, state.options);
+    log(`Page ${i}: ${items.length} text items → ${md.split('\n').filter(Boolean).length} lines`, items.length > 0 ? 'ok' : 'warn');
     pageMarkdowns.push(md);
     page.cleanup();
   }
 
   if (allEmpty) {
+    log('All pages empty — no embedded text found', 'warn');
     if (state.options.ocr) return assembleOutput(rec.sanitizedName, ['[OCR mode required — no embedded text found]']);
     return `# ${rec.sanitizedName}\n\nNo text could be extracted from this document. Enable OCR Mode if this is a scanned document.`;
   }
@@ -696,9 +758,12 @@ function assembleOutput(name, pageMarkdowns) {
 // ─── OCR conversion ───────────────────────────────────────────────────────────
 
 async function convertWithOCR(rec, pdf) {
+  log('Importing Tesseract.js ESM module…', 'info');
   const tesseractLib = (await import('/vendor/tesseract/tesseract.esm.min.js')).default;
+  log('Tesseract.js module loaded', 'ok');
   const createWorker = tesseractLib.createWorker;
 
+  log(`Creating Tesseract worker — lang: ${state.options.lang}, workerPath: /vendor/tesseract/worker.min.js`, 'info');
   let worker;
   try {
     worker = await createWorker(state.options.lang, 1, {
@@ -706,20 +771,22 @@ async function convertWithOCR(rec, pdf) {
       langPath:    '/assets/tessdata/',
       corePath:    '/vendor/tesseract-core/',
       logger: m => {
-        console.debug('[Tesseract]', m.status, m.progress ?? '');
+        if (m.status && m.status !== 'recognizing text') {
+          log(`Tesseract: ${m.status} ${m.progress != null ? `(${(m.progress*100).toFixed(0)}%)` : ''}`, 'info');
+        }
         if (m.status === 'recognizing text' && m.progress != null) {
           rec.progress = Math.round(m.progress * 100);
           renderQueueItem(rec);
         }
       },
     });
+    log('Tesseract worker ready', 'ok');
   } catch (initErr) {
-    console.error('[Tesseract] Worker init failed:', initErr);
+    log(`Tesseract worker init FAILED: ${initErr?.message || initErr}`, 'error');
     throw new Error(`OCR worker failed to initialize: ${initErr?.message || initErr}`);
   }
 
   rec.worker = worker;
-
   const pageMarkdowns = [];
 
   try {
@@ -728,16 +795,18 @@ async function convertWithOCR(rec, pdf) {
 
       rec.status = 'ocr';
       rec.ocrPage = i;
+      log(`── Page ${i}/${pdf.numPages}`, 'step');
       renderQueueItem(rec);
       await yield$();
 
+      log(`Page ${i}: reading text content…`, 'info');
       const page = await pdf.getPage(i);
-
-      // first try standard text extraction
       const textContent = await page.getTextContent();
       const hasText = textContent.items.some(it => it.str.trim().length > 0);
+      log(`Page ${i}: ${textContent.items.length} text items, hasText=${hasText}`, hasText ? 'ok' : 'warn');
 
       if (hasText) {
+        log(`Page ${i}: using embedded text (skipping OCR)`, 'info');
         const viewport = page.getViewport({ scale: 1 });
         const items = textContent.items
           .filter(item => item.str && item.str.trim())
@@ -756,29 +825,36 @@ async function convertWithOCR(rec, pdf) {
         continue;
       }
 
-      // render page to canvas at 3x scale
-      const viewport = page.getViewport({ scale: 3 });
-      const canvas   = document.createElement('canvas');
-      canvas.width   = viewport.width;
-      canvas.height  = viewport.height;
-      const ctx      = canvas.getContext('2d');
+      // render page to canvas at 2x scale (3x can cause OOM on large images)
+      const viewport = page.getViewport({ scale: 2 });
+      log(`Page ${i}: rendering canvas ${Math.round(viewport.width)}×${Math.round(viewport.height)}px…`, 'info');
+      const canvas = document.createElement('canvas');
+      canvas.width  = Math.round(viewport.width);
+      canvas.height = Math.round(viewport.height);
+      const ctx = canvas.getContext('2d');
 
       await page.render({ canvasContext: ctx, viewport }).promise;
       page.cleanup();
+      log(`Page ${i}: canvas rendered`, 'ok');
 
+      log(`Page ${i}: converting canvas to PNG blob…`, 'info');
       const blob = await canvasToBlob(canvas);
+      log(`Page ${i}: blob ready (${(blob.size/1024).toFixed(0)} KB), sending to Tesseract…`, 'ok');
 
       try {
         const result = await worker.recognize(blob);
         const text   = result.data.text || '';
+        const conf   = result.data.confidence?.toFixed(0) ?? '?';
+        log(`Page ${i}: OCR complete — confidence ${conf}%, ${text.trim().length} chars`, 'ok');
         const normalized = state.options.normalize ? text.normalize('NFC') : text;
         pageMarkdowns.push(normalized.trim());
       } catch (ocrErr) {
+        log(`Page ${i}: OCR recognition failed — ${ocrErr?.message}`, 'error');
         pageMarkdowns.push(`[OCR failed — page ${i}]`);
       }
     }
   } finally {
-    try { await worker.terminate(); } catch {}
+    try { await worker.terminate(); log('Tesseract worker terminated', 'info'); } catch {}
     rec.worker = null;
   }
 

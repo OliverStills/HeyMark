@@ -137,6 +137,7 @@
   <section id="actions-bar" aria-label="Actions" hidden>
     <div class="actions-left">
       <button class="btn btn-primary" id="convert-all-btn" type="button">Convert All</button>
+      <button class="btn btn-secondary" id="activity-btn" type="button" aria-expanded="false" aria-controls="activity-panel">Real-Time Activity</button>
     </div>
     <div class="actions-right">
       <button class="btn btn-secondary" id="download-md-btn" type="button" hidden>Download .md</button>
@@ -144,6 +145,15 @@
       <button class="btn btn-secondary" id="download-zip-btn" type="button" hidden>Download All as .zip</button>
       <button class="btn btn-secondary" id="clear-all-btn" type="button">Clear All</button>
     </div>
+  </section>
+
+  <!-- ===== ACTIVITY LOG ===== -->
+  <section id="activity-panel" aria-label="Real-time processing activity" hidden>
+    <div class="activity-header">
+      <span class="activity-title">REAL-TIME ACTIVITY</span>
+      <button class="btn-icon" id="activity-clear-btn" type="button" aria-label="Clear log">CLEAR</button>
+    </div>
+    <div id="activity-log" role="log" aria-live="polite" aria-label="Processing activity log"></div>
   </section>
 
   <!-- ===== RESULT PANEL ===== -->
