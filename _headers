@@ -16,6 +16,12 @@
 /vendor/*
   Cache-Control: public, max-age=31536000, immutable
 
+/vendor/tesseract/*
+  Cross-Origin-Resource-Policy: cross-origin
+
+/vendor/tesseract-core/*
+  Cross-Origin-Resource-Policy: cross-origin
+
 /assets/tessdata/*
   Cache-Control: public, max-age=31536000, immutable
   Cross-Origin-Embedder-Policy: require-corp
