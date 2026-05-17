@@ -768,8 +768,9 @@ async function convertWithOCR(rec, pdf) {
   try {
     worker = await createWorker(state.options.lang, 1, {
       workerPath:  '/vendor/tesseract/worker.min.js',
-      langPath:    '/assets/tessdata/',
+      langPath:    '/assets/tessdata',
       corePath:    '/vendor/tesseract-core/',
+      gzip:        false,
       logger: m => {
         if (m.status && m.status !== 'recognizing text') {
           log(`Tesseract: ${m.status} ${m.progress != null ? `(${(m.progress*100).toFixed(0)}%)` : ''}`, 'info');
