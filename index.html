@@ -10,11 +10,11 @@
   <!-- CSP — tightened for production; blob: required for pdf.js workers -->
   <meta http-equiv="Content-Security-Policy" content="
     default-src 'none';
-    script-src 'self';
+    script-src 'self' 'wasm-unsafe-eval';
     style-src 'self';
     font-src 'self';
     img-src 'self' data: blob:;
-    connect-src 'self';
+    connect-src 'self' blob: data:;
     worker-src 'self' blob:;
     form-action 'none';
     base-uri 'none';
