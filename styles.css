@@ -351,6 +351,8 @@ header {
 }
 .btn-secondary:hover { background: rgba(139,105,20,.06); }
 
+#verify-btn { font-size: 10px; padding: 3px 10px; }
+
 .btn:focus-visible {
   outline: 2px solid var(--sepia);
   outline-offset: 2px;
@@ -651,6 +653,19 @@ header {
   padding: 8px 14px;
   border-bottom: 1px solid var(--aged);
 }
+
+#ocr-confidence {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: .08em;
+  padding: 3px 10px;
+  border-radius: var(--radius);
+  border: 1px solid currentColor;
+  margin-right: 8px;
+}
+#ocr-confidence.conf-high   { color: var(--success); }
+#ocr-confidence.conf-medium { color: var(--sepia); }
+#ocr-confidence.conf-low    { color: var(--rust); }
 
 #copy-btn {
   font-family: 'JetBrains Mono', monospace;

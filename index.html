@@ -74,11 +74,11 @@
     </div>
 
     <div class="toggle-group">
-      <label class="toggle-switch" title="Enable table and footnote detection">
-        <input type="checkbox" id="opt-extended" role="switch" aria-checked="false">
+      <label class="toggle-switch" title="Reconstruct tables from layout (recommended)">
+        <input type="checkbox" id="opt-extended" checked role="switch" aria-checked="true">
         <span class="toggle-track" aria-hidden="true"></span>
       </label>
-      <span class="toggle-label">Extended MD</span>
+      <span class="toggle-label">Detect Tables</span>
     </div>
 
     <div class="toggle-group">
@@ -171,6 +171,7 @@
     <div id="file-selector-row" class="file-selector-row" role="toolbar" aria-label="Select file to view" hidden></div>
 
     <div class="panel-header">
+      <span id="ocr-confidence" hidden aria-label="OCR confidence score"></span>
       <button class="btn" id="copy-btn" type="button" aria-label="Copy markdown to clipboard">COPY</button>
     </div>
 
@@ -182,8 +183,8 @@
   <!-- ===== FOOTER ===== -->
   <footer role="contentinfo">
     <p>
-      HEYMARK&nbsp;·&nbsp;v1.0.0&nbsp;·&nbsp;ALL PROCESSING IS LOCAL&nbsp;·&nbsp;
-      <button id="verify-btn" class="btn btn-secondary" style="font-size:10px;padding:3px 10px;" type="button">VERIFY</button>
+      HEYMARK&nbsp;·&nbsp;v1.1.0&nbsp;·&nbsp;ALL PROCESSING IS LOCAL&nbsp;·&nbsp;
+      <button id="verify-btn" class="btn btn-secondary" type="button">VERIFY</button>
       &nbsp;·&nbsp;
       <a href="https://github.com/oliverstills/heymark" rel="noopener noreferrer" target="_blank">SOURCE ↗</a>
     </p>

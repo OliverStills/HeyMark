@@ -37,19 +37,20 @@
       <li>Verify that <strong>all requests</strong> go only to <code>heymark.pages.dev</code> (or your custom domain). There should be zero requests to any third-party origin.</li>
     </ul>
 
-    <h2>How to verify the app hash</h2>
+    <h2>How to verify the app</h2>
     <ul>
       <li>On the main app page, click <strong>VERIFY</strong> in the footer.</li>
-      <li>The app computes a SHA-256 hash of the loaded HTML and all scripts/styles.</li>
-      <li>It fetches <code>/release-hash.json</code> — a static file deployed alongside each release — and compares the hashes.</li>
-      <li>If they match, the code running in your browser is identical to the published release.</li>
+      <li>The app fetches <code>/release-hash.json</code> — a manifest listing a SHA-256 hash for every runtime asset (the HTML, app script, styles, the pdf.js and Tesseract workers, the WebAssembly cores, and the OCR language data).</li>
+      <li>It then re-fetches each of those files, hashes the raw bytes locally, and compares them to the manifest — reporting how many of the files match and naming any that do not.</li>
+      <li>If every file matches, the code and assets running in your browser are byte-for-byte identical to the published release. All hashing happens in your browser; nothing is uploaded.</li>
     </ul>
 
     <h2>How to verify manually</h2>
     <ul>
-      <li>Clone the repository: <code>git clone https://github.com/oliverstills/heymark</code></li>
+      <li>Clone the repository: <code>git clone https://github.com/OliverStills/HeyMark</code></li>
       <li>Check out the release tag matching the version shown in the footer.</li>
-      <li>Build the project (instructions in <code>BUILD.md</code>) and compare the SHA-256 of the output files to those in the GitHub release notes.</li>
+      <li>Run <code>node build-hashes.mjs</code> and confirm the regenerated <code>release-hash.json</code> is identical to the one served by the site.</li>
+      <li>The manifest's own SHA-256 is published in the GitHub release notes, so you can confirm the manifest itself has not been altered.</li>
     </ul>
 
     <h2>Source code</h2>

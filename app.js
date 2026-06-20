@@ -11,7 +11,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = '/vendor/pdfjs/pdf.worker.mjs';
 const MAX_SIZE_BYTES = 50 * 1024 * 1024;
 const MAX_PAGES      = 2000;
 const MAX_FILES      = 50;
-const VERSION        = '1.0.0';
+const VERSION        = '1.1.0';
 
 // ─── Activity log ─────────────────────────────────────────────────────────────
 const activityEntries = [];
@@ -58,7 +58,7 @@ const state = {
   options: {
     ocr:       false,
     lang:      'eng',
-    extended:  false,
+    extended:  true,
     normalize: true,
     hyphens:   true,
   },
@@ -94,6 +94,7 @@ const tabRaw           = $('tab-raw');
 const tabPreview       = $('tab-preview');
 const fileSelectorRow  = $('file-selector-row');
 const copyBtn          = $('copy-btn');
+const ocrConfEl        = $('ocr-confidence');
 const rawPanel         = $('raw-panel');
 const previewPanel     = $('preview-panel');
 const verifyBtn        = $('verify-btn');
@@ -597,151 +598,231 @@ async function convertStandard(rec, pdf) {
 
 // ─── Reading order reconstruction ────────────────────────────────────────────
 
-function reconstructReadingOrder(items, viewport) {
-  if (items.length === 0) return [];
+// ─── Reading order, headings, tables (v2 — legal-tuned) ─────────────────────
 
-  const pageH = viewport.height;
-  const headerThresh = pageH * 0.93; // top 7%
-  const footerThresh = pageH * 0.07; // bottom 7%
-
-  // filter header/footer (simple pass — full dedup across pages would need state)
-  const body = items.filter(it => it.y < headerThresh && it.y > footerThresh);
-
-  if (body.length === 0) return items; // fallback: return all
-
-  // detect columns by clustering X positions
-  const xs = body.map(it => it.x).sort((a, b) => a - b);
-  const pageW = viewport.width;
-  const midX  = pageW / 2;
-
-  // simple two-column detection: significant gap around center
-  const leftItems  = body.filter(it => it.x < midX - 20);
-  const rightItems = body.filter(it => it.x >= midX + 20);
-  const midItems   = body.filter(it => it.x >= midX - 20 && it.x < midX + 20);
-
-  const hasTwoColumns =
-    leftItems.length > 5 && rightItems.length > 5 &&
-    midItems.length < (leftItems.length + rightItems.length) * 0.15;
-
-  const sortTopBottom = arr =>
-    [...arr].sort((a, b) => b.y - a.y || a.x - b.x);
-
-  if (hasTwoColumns) {
-    return [...sortTopBottom(leftItems), ...sortTopBottom(rightItems)];
+function modalHeight(items) {
+  const counts = new Map();
+  for (const it of items) {
+    if (it.height < 6 || it.height > 18) continue;
+    const k = Math.round(it.height * 2) / 2;
+    counts.set(k, (counts.get(k) || 0) + 1);
   }
-
-  return sortTopBottom(body);
+  let best = 10.5, bestN = 0;
+  for (const [k, n] of counts) if (n > bestN) { best = k; bestN = n; }
+  return best;
 }
 
-// ─── Markdown construction ────────────────────────────────────────────────────
+function groupIntoLines(items, modalH) {
+  const tol = Math.max(2.5, modalH * 0.5);
+  const sorted = [...items].sort((a, b) => b.y - a.y || a.x - b.x);
+  const lines = [];
+  let cur = [];
+  for (const it of sorted) {
+    if (!cur.length) { cur = [it]; continue; }
+    if (Math.abs(it.y - cur[cur.length - 1].y) <= tol) cur.push(it);
+    else { lines.push(cur); cur = [it]; }
+  }
+  if (cur.length) lines.push(cur);
+  return lines.map(ln => {
+    ln.sort((a, b) => a.x - b.x);
+    const h = Math.max(...ln.map(i => i.height));
+    const meta = { items: ln, y: ln[0].y, x0: ln[0].x, h, text: ln.map(i => i.str).join(' ').replace(/\s+/g, ' ').trim() };
+    // ordered-list marker CANDIDATE: lone leading number/letter token + wide gap to body text.
+    // Only applied later for lines that are NOT part of a detected table (tables can have a numeric first column).
+    if (ln.length >= 2 && /^(\d{1,3}|[ivxlc]{1,4}|[a-z])$/i.test(ln[0].str.trim()) && (ln[1].x - ln[0].x) > 18) {
+      meta.olCand = true;
+      meta.olMarker = ln[0].str.trim().replace(/\.$/, '');
+      meta.olText = ln.slice(1).map(i => i.str).join(' ').replace(/\s+/g, ' ').trim();
+    }
+    return meta;
+  });
+}
 
+function isAllCaps(t) {
+  const letters = t.replace(/[^A-Za-z]/g, '');
+  return letters.length >= 3 && letters === letters.toUpperCase() && /[A-Z]/.test(letters);
+}
+
+// ─── heading classifier (pattern + size) ─────────────────────────────────────
+function headingPrefix(line, modalH) {
+  const t = line.text, h = line.h, len = t.length;
+  if (!t) return null;
+  if (h >= modalH * 1.35) return '# ';                                            // doc title
+  if (/^[IVXLC]{1,5}\.\s+\S/.test(t) && h >= modalH * 1.05) return '## ';         // roman section
+  if (/^\d{1,2}\.\s+[A-Z]/.test(t) && h >= modalH * 1.12 && len < 60) return '## '; // numbered contract section
+  if (/^Exhibit\s+[A-Z0-9]/i.test(t) && h >= modalH * 1.05) return '## ';          // Exhibit heading
+  if (isAllCaps(t) && len <= 45 && h >= modalH * 1.03) return '## ';               // INTRODUCTION, ARGUMENT…
+  if (/^[A-Z]\.\s+\S/.test(t) && h >= modalH * 1.0 && len < 75) return '### ';     // lettered subhead A., B.
+  if (h >= modalH * 1.22) return '## ';
+  if (h >= modalH * 1.1)  return '### ';
+  return null;
+}
+
+// ─── table detection ─────────────────────────────────────────────────────────
+// A table block = run of >=2 consecutive lines that each place items at >=2
+// shared column anchors. Returns {start,end,cols} or null per region.
+function clusterAnchors(xsByLine, tol = 14) {
+  const all = [];
+  for (const xs of xsByLine) for (const x of xs) all.push(x);
+  all.sort((a, b) => a - b);
+  const clusters = [];
+  for (const x of all) {
+    const last = clusters[clusters.length - 1];
+    if (last && x - last.mean <= tol) { last.xs.push(x); last.mean = last.xs.reduce((s, v) => s + v, 0) / last.xs.length; }
+    else clusters.push({ xs: [x], mean: x });
+  }
+  return clusters.map(c => ({ x: c.mean, count: c.xs.length }));
+}
+
+function detectTableBlocks(lines, modalH) {
+  const blocks = [];
+  let i = 0;
+  while (i < lines.length) {
+    // a heading or ordered-list line can never start/extend a table
+    if (headingPrefix(lines[i], modalH)) { i++; continue; }
+    let j = i;
+    const xsByLine = [];
+    while (j < lines.length) {
+      if (j > i && headingPrefix(lines[j], modalH)) break; // stop at heading
+      const xs = lines[j].items.map(it => it.x);
+      xsByLine.push(xs);
+      const anchors = clusterAnchors(xsByLine).filter(a => a.count >= 2);
+      if (j > i) {
+        const hits = anchors.filter(a => xs.some(x => Math.abs(x - a.x) <= 16)).length;
+        if (anchors.length < 2 || hits < 1) { xsByLine.pop(); break; }
+      }
+      j++;
+    }
+    const runLen = j - i;
+    if (runLen >= 2) {
+      const anchors = clusterAnchors(xsByLine).filter(a => a.count >= 2 && a.count >= Math.ceil(runLen * 0.5));
+      // need >=2 columns, separated by >40px, and most rows fill >=2 cols
+      const cols = anchors.map(a => a.x).sort((x, y) => x - y);
+      const wellSeparated = cols.length >= 2 && cols.every((c, k) => k === 0 || c - cols[k - 1] > 40);
+      const rows = lines.slice(i, j);
+      const multiColRows = rows.filter(r => {
+        const xs = r.items.map(it => it.x);
+        return cols.filter(c => xs.some(x => Math.abs(x - c) <= 18)).length >= 2;
+      }).length;
+      if (wellSeparated && multiColRows >= 2) {
+        blocks.push({ start: i, end: j, cols });
+        i = j; continue;
+      }
+    }
+    i++;
+  }
+  return blocks;
+}
+
+function buildTable(rows, cols) {
+  // assign each item to nearest column whose anchor <= item.x (last col catches rest)
+  const colOf = x => {
+    let idx = 0;
+    for (let c = 0; c < cols.length; c++) if (x >= cols[c] - 18) idx = c;
+    return idx;
+  };
+  const grid = [];
+  for (const r of rows) {
+    const cells = Array.from({ length: cols.length }, () => []);
+    for (const it of r.items) cells[colOf(it.x)].push(it.str);
+    const row = cells.map(c => c.join(' ').replace(/\s+/g, ' ').trim());
+    // continuation row (only later cols filled, first col empty) → merge into previous
+    if (grid.length && row[0] === '' && row.some(c => c !== '')) {
+      const prev = grid[grid.length - 1];
+      row.forEach((c, k) => { if (c) prev[k] = (prev[k] + ' ' + c).trim(); });
+    } else grid.push(row);
+  }
+  if (grid.length < 2) return null;
+  const esc = s => s.replace(/\|/g, '\\|');
+  const header = grid[0];
+  const out = [];
+  out.push('| ' + header.map(esc).join(' | ') + ' |');
+  out.push('| ' + header.map(() => '---').join(' | ') + ' |');
+  for (let r = 1; r < grid.length; r++) out.push('| ' + grid[r].map(esc).join(' | ') + ' |');
+  return out.join('\n');
+}
+
+// ─── reading order (caption-aware, two-column safe) ──────────────────────────
+function reconstructReadingOrder(items, viewport) {
+  if (!items.length) return [];
+  const pageH = viewport.height;
+  const body = items.filter(it => it.y < pageH * 0.95 && it.y > pageH * 0.045); // strip running header/footer/page#
+  if (!body.length) return items;
+  const pageW = viewport.width, midX = pageW / 2;
+  const left = body.filter(it => it.x < midX - 20);
+  const right = body.filter(it => it.x >= midX + 20);
+  const mid = body.filter(it => it.x >= midX - 20 && it.x < midX + 20);
+  const twoCol = left.length > 8 && right.length > 8 && mid.length < (left.length + right.length) * 0.12;
+  const tb = arr => [...arr].sort((a, b) => b.y - a.y || a.x - b.x);
+  if (twoCol) return [...tb(left), ...tb(right)];
+  return tb(body);
+}
+
+// ─── main ────────────────────────────────────────────────────────────────────
 function buildPageMarkdown(items, viewport, opts) {
-  if (items.length === 0) return '';
+  if (!items.length) return '';
+  const modalH = modalHeight(items);
+  const lines = groupIntoLines(items, modalH);
 
-  // group into lines by Y (within ~2px tolerance)
-  const lines = groupIntoLines(items);
+  const tables = opts.extended === false ? [] : detectTableBlocks(lines, modalH);
+  const inTable = idx => tables.find(t => idx >= t.start && idx < t.end);
 
-  // compute median font height
-  const heights = items.map(it => it.height).filter(h => h > 0).sort((a, b) => a - b);
-  const median  = heights[Math.floor(heights.length / 2)] || 12;
-
-  const mdLines = [];
+  const out = [];
+  let para = [];
+  const sep = () => { if (out.length && out[out.length - 1] !== '') out.push(''); };
+  const flushPara = () => { if (para.length) { out.push(para.join(' ')); para = []; out.push(''); } };
 
   for (let i = 0; i < lines.length; i++) {
-    const line    = lines[i];
-    const text    = line.map(it => it.str).join(' ').trim();
-    if (!text) continue;
-
-    const avgH    = line.reduce((s, it) => s + it.height, 0) / line.length;
-    const isBold  = line.some(it => it.bold);
-
-    let prefix = '';
-    if      (avgH >= median * 2.0) prefix = '# ';
-    else if (avgH >= median * 1.5) prefix = '## ';
-    else if (avgH >= median * 1.2) prefix = '### ';
-    else if (isBold && avgH >= median * 0.9) prefix = '### ';
-
-    // list detection
-    const listMatch = text.match(/^([•\-\*·○–])\s+(.*)$/);
-    const olMatch   = text.match(/^(\d+\.|[a-z]\.|[ivxlc]+\.|[IVX]+\.|\([a-z0-9]+\))\s+(.*)$/i);
-
-    let mdLine;
-    if (listMatch && !prefix) {
-      mdLine = `- ${listMatch[2]}`;
-    } else if (olMatch && !prefix) {
-      mdLine = `1. ${olMatch[2]}`;
-    } else {
-      mdLine = prefix + text;
-    }
-
-    // hyphen rejoining: check if this line ends with '-' and next starts lowercase
-    if (i < lines.length - 1 && !prefix) {
-      const nextLine = lines[i + 1];
-      const nextText = nextLine.map(it => it.str).join(' ').trim();
-      if (mdLine.endsWith('-') && nextText && /^[a-z]/.test(nextText)) {
-        const stem   = mdLine.slice(0, -1);
-        const joined = stem + nextText.split(/\s/)[0];
-        const stemWord = stem.split(/\s/).pop().toLowerCase();
-        if (opts.hyphens && COMPOUND_PREFIXES.has(stemWord)) {
-          // keep hyphen — merge lines with hyphen preserved
-          const restNext = nextText.replace(/^\S+\s*/, '');
-          mdLines.push(mdLine + (restNext ? '\n' + restNext : ''));
-          i++; // skip next line
-          continue;
-        } else {
-          // join without hyphen
-          const restNext = nextText.replace(/^\S+\s*/, '');
-          mdLines.push(stem + nextText.split(/\s/)[0] + (restNext ? ' ' + restNext : ''));
-          i++;
-          continue;
-        }
-      }
-    }
-
-    // vertical gap detection for paragraph breaks
-    if (i > 0) {
-      const prevLine = lines[i - 1];
-      const prevY = prevLine[0].y;
-      const currY = line[0].y;
-      const gap   = Math.abs(prevY - currY);
-      const lineH = avgH || median;
-
-      if (gap > lineH * 3) {
-        mdLines.push('');
-        mdLines.push('---');
-        mdLines.push('');
-      } else if (gap > lineH * 1.5) {
-        mdLines.push('');
-      }
-    }
-
-    mdLines.push(mdLine);
-  }
-
-  return mdLines.join('\n');
-}
-
-function groupIntoLines(items) {
-  const lines = [];
-  let current = [];
-
-  for (const item of items) {
-    if (current.length === 0) {
-      current.push(item);
+    const tbl = inTable(i);
+    if (tbl) {
+      if (tbl.start === i) { flushPara(); sep(); const t = buildTable(lines.slice(tbl.start, tbl.end), tbl.cols); if (t) { out.push(t); out.push(''); } }
       continue;
     }
-    const lastY = current[current.length - 1].y;
-    if (Math.abs(item.y - lastY) <= 2) {
-      current.push(item);
-    } else {
-      lines.push(current);
-      current = [item];
+    const ln = lines[i];
+    if (!ln.text) continue;
+
+    // ordered-list marker (superscript number paired with body text) — before heading test
+    if (ln.olCand) { flushPara(); out.push(`${ln.olMarker}. ${ln.olText}`); continue; }
+
+    const prefix = headingPrefix(ln, modalH);
+    if (prefix) {
+      flushPara(); sep();
+      const lvl = prefix.trim();
+      let text = ln.text;
+      while (i + 1 < lines.length && !inTable(i + 1)) {
+        const nxt = lines[i + 1];
+        const np = headingPrefix(nxt, modalH);
+        if (np && np.trim() === lvl && !nxt.olCand && Math.abs(nxt.y - ln.y) < modalH * 2.2) { text += ' ' + nxt.text; i++; } else break;
+      }
+      out.push(prefix + text);
+      out.push('');
+      continue;
     }
+
+    // explicit inline list markers
+    const ulm = ln.text.match(/^([•\-\*·○–])\s+(.*)$/);
+    const olm = ln.text.match(/^(\d+\.|\([a-z0-9]+\))\s+(.*)$/i);
+    if (ulm) { flushPara(); out.push(`- ${ulm[2]}`); continue; }
+    if (olm) { flushPara(); out.push(`1. ${olm[2]}`); continue; }
+
+    // body: reflow into paragraphs, break on vertical gap
+    if (para.length) {
+      const prevY = lines[i - 1] ? lines[i - 1].y : ln.y;
+      if (Math.abs(prevY - ln.y) > ln.h * 2.0) flushPara();
+    }
+    if (para.length && /[A-Za-z]-$/.test(para[para.length - 1])) {
+      const stem = para[para.length - 1];
+      const stemWord = stem.split(/\s/).pop().slice(0, -1).toLowerCase();
+      if (!(opts.hyphens && COMPOUND_PREFIXES.has(stemWord))) { para[para.length - 1] = stem.slice(0, -1) + ln.text.split(/\s/)[0]; para.push(ln.text.split(/\s/).slice(1).join(' ')); continue; }
+    }
+    para.push(ln.text);
   }
-  if (current.length > 0) lines.push(current);
-  return lines;
+  flushPara();
+
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
+// ─── Output assembly ─────────────────────────────────────────────────────────
 function assembleOutput(name, pageMarkdowns) {
   const parts = [`# ${name}`];
   for (const md of pageMarkdowns) {
@@ -789,6 +870,7 @@ async function convertWithOCR(rec, pdf) {
 
   rec.worker = worker;
   const pageMarkdowns = [];
+  const confScores = [];
 
   try {
     for (let i = 1; i <= pdf.numPages; i++) {
@@ -826,17 +908,23 @@ async function convertWithOCR(rec, pdf) {
         continue;
       }
 
-      // render page to canvas at 2x scale (3x can cause OOM on large images)
-      const viewport = page.getViewport({ scale: 2 });
+      // render page to canvas at 3x scale for OCR (higher res improves accuracy
+      // on dense/skewed legal scans; preprocessing below keeps Tesseract fast).
+      const viewport = page.getViewport({ scale: 3 });
       log(`Page ${i}: rendering canvas ${Math.round(viewport.width)}×${Math.round(viewport.height)}px…`, 'info');
       const canvas = document.createElement('canvas');
       canvas.width  = Math.round(viewport.width);
       canvas.height = Math.round(viewport.height);
-      const ctx = canvas.getContext('2d');
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
       await page.render({ canvasContext: ctx, viewport }).promise;
       page.cleanup();
       log(`Page ${i}: canvas rendered`, 'ok');
+
+      // preprocess: grayscale + Otsu binarization. Cleans up scanner noise,
+      // blur, and uneven lighting that degrade OCR on image-only exhibits.
+      preprocessForOCR(canvas, ctx);
+      log(`Page ${i}: preprocessed (grayscale + binarize)`, 'ok');
 
       log(`Page ${i}: converting canvas to PNG blob…`, 'info');
       const blob = await canvasToBlob(canvas);
@@ -845,10 +933,28 @@ async function convertWithOCR(rec, pdf) {
       try {
         const result = await worker.recognize(blob);
         const text   = result.data.text || '';
-        const conf   = result.data.confidence?.toFixed(0) ?? '?';
-        log(`Page ${i}: OCR complete — confidence ${conf}%, ${text.trim().length} chars`, 'ok');
-        const normalized = state.options.normalize ? text.normalize('NFC') : text;
-        pageMarkdowns.push(normalized.trim());
+        const confNum = typeof result.data.confidence === 'number' ? result.data.confidence : null;
+        const conf   = confNum != null ? confNum.toFixed(0) : '?';
+        if (confNum != null) confScores.push(confNum);
+        log(`Page ${i}: OCR complete — confidence ${conf}%, ${text.trim().length} chars`, confNum != null && confNum < 75 ? 'warn' : 'ok');
+
+        // reconstruct layout using Tesseract line segmentation + word bboxes for
+        // column detection; fall back to raw text if line data is unavailable
+        let pageMarkdown;
+        if (result.data.lines?.length > 0) {
+          pageMarkdown = buildPageMarkdownFromOCR(result.data, canvas, 3, state.options);
+          if (!pageMarkdown) {
+            pageMarkdown = state.options.normalize ? text.normalize('NFC').trim() : text.trim();
+          }
+        } else {
+          pageMarkdown = state.options.normalize ? text.normalize('NFC').trim() : text.trim();
+        }
+
+        // confidence labeling: flag low-confidence pages so reviewers verify against source
+        if (confNum != null && confNum < 75 && pageMarkdown) {
+          pageMarkdown = `> ⚠️ **Low OCR confidence (${conf}%)** — text recognition on this page is unreliable. Common causes: light or faded ink, blurry or low-resolution scan, or significant page skew. For best results, re-scan at 300+ DPI with high contrast, straight alignment, and dark lines. Review this page against the original document before relying on any extracted text.\n\n${pageMarkdown}`;
+        }
+        pageMarkdowns.push(pageMarkdown);
       } catch (ocrErr) {
         log(`Page ${i}: OCR recognition failed — ${ocrErr?.message}`, 'error');
         pageMarkdowns.push(`[OCR failed — page ${i}]`);
@@ -858,6 +964,9 @@ async function convertWithOCR(rec, pdf) {
     try { await worker.terminate(); log('Tesseract worker terminated', 'info'); } catch {}
     rec.worker = null;
   }
+
+  if (confScores.length)
+    rec.ocrConfidence = Math.round(confScores.reduce((a, b) => a + b, 0) / confScores.length);
 
   if (rec.status === 'cancelled') return '';
   return assembleOutput(rec.sanitizedName, pageMarkdowns);
@@ -870,6 +979,352 @@ function canvasToBlob(canvas) {
       else reject(new Error('canvas.toBlob failed'));
     }, 'image/png');
   });
+}
+
+// OCR-specific layout reconstruction. Uses Tesseract's own line segmentation
+// (result.data.lines) rather than re-grouping from raw word bboxes, because
+// Tesseract's line grouping is far more reliable than re-deriving it from noisy
+// OCR bboxes. Word bboxes are used only for column detection inside each line.
+// Heading detection is pattern-only (EXHIBIT, ALL CAPS) — font-height is not a
+// reliable signal from OCR bboxes and causes dates/rows to be misclassified.
+function buildPageMarkdownFromOCR(ocrData, canvas, scale, opts) {
+  const canvasW = canvas.width, canvasH = canvas.height;
+  const pageH = canvasH / scale;
+
+  // Build line items using Tesseract's own line segmentation. Reconstruct line
+  // text from words with confidence >= 5 to capture italic/bordered-cell text;
+  // word x-positions (normalized to 1× space) are kept for word-bbox column detection.
+  const rawLines = (ocrData.lines || [])
+    .map(l => {
+      const goodWords = (l.words || [])
+        .filter(w => { const t = w.text.trim(); return t && w.confidence >= 5 && !/^[|\[\]]$/.test(t); })
+        .map(w => ({ text: w.text, x: w.bbox.x0 / scale }));
+      return {
+        text:   goodWords.map(w => w.text).join(' ').replace(/\s+/g, ' ').trim(),
+        wordXs: goodWords.map(w => w.x),
+        words:  goodWords,
+        y:      (canvasH - l.bbox.y0) / scale,
+        yMid:   (l.bbox.y0 + l.bbox.y1) / 2 / scale,  // top-down, for ruled-line region test
+        h:      (l.bbox.y1 - l.bbox.y0) / scale,
+      };
+    })
+    .filter(l => l.text && l.y > pageH * 0.04 && l.y < pageH * 0.97)
+    .filter(l => !(l.text.length <= 4 && /^[a-z]/.test(l.text)));
+
+  // Ruled-line table detection: scan binarized canvas for physical border lines
+  // and assign words geometrically to cells. More reliable than word-bbox clustering
+  // for scanned documents with visible borders; falls back to word-bbox if no grid found.
+  let ruledTable = null;
+  if (opts.tables !== false) {
+    const ruled = detectRuledLines(canvas, scale);
+    if (ruled) ruledTable = buildRuledTable(ocrData.words || [], ruled.hLines, ruled.vLines, scale);
+  }
+
+  const tableBlocks = ruledTable ? [] : detectOCRTables(rawLines);
+  const inTable = idx => tableBlocks.find(t => idx >= t.start && idx < t.end);
+
+  const out = [];
+  const sep = () => { if (out.length && out[out.length - 1] !== '') out.push(''); };
+  let para = [];
+  const flushPara = () => { if (para.length) { out.push(para.join(' ')); para = []; out.push(''); } };
+  let ruledTableEmitted = false;
+
+  for (let i = 0; i < rawLines.length; i++) {
+    const line = rawLines[i];
+
+    // Ruled table: emit once on first in-table line; skip all lines in the table region
+    if (ruledTable) {
+      const inRegion = line.yMid >= ruledTable.y0 && line.yMid <= ruledTable.y1;
+      if (inRegion) {
+        if (!ruledTableEmitted) {
+          flushPara(); sep();
+          out.push(ruledTable.markdown);
+          out.push('');
+          ruledTableEmitted = true;
+        }
+        continue;
+      }
+    }
+
+    const tbl = inTable(i);
+    if (tbl) {
+      if (tbl.start === i) {
+        flushPara(); sep();
+        const t = buildOCRTable(rawLines.slice(tbl.start, tbl.end), tbl.cols);
+        if (t) { out.push(t); out.push(''); }
+      }
+      continue;
+    }
+
+    const { text } = line;
+    if (!text) continue;
+
+    // Pattern-only heading detection (no height heuristics)
+    if (/^EXHIBIT\s+[A-Z0-9]/i.test(text)) {
+      flushPara(); sep(); out.push(`## ${text}`); out.push(''); continue;
+    }
+    if (isAllCaps(text) && text.length >= 3 && text.length <= 60) {
+      flushPara(); sep(); out.push(`## ${text}`); out.push(''); continue;
+    }
+
+    // Ordered / unordered lists
+    const olm = text.match(/^(\d{1,2}\.)\s+(.*)/);
+    if (olm) { flushPara(); out.push(`${olm[1]} ${olm[2]}`); continue; }
+    const ulm = text.match(/^[•\-\*·]\s+(.*)/);
+    if (ulm) { flushPara(); out.push(`- ${ulm[1]}`); continue; }
+
+    // Body paragraph — break on large vertical gaps
+    if (para.length) {
+      const prevY = rawLines[i - 1] ? rawLines[i - 1].y : rawLines[i].y;
+      if (Math.abs(prevY - rawLines[i].y) > rawLines[i].h * 2.5) flushPara();
+    }
+    para.push(text);
+  }
+  flushPara();
+
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+// Column detection for OCR lines: clusters word x-positions across consecutive
+// lines to find shared column anchors (same algorithm as the pdf.js path).
+function detectOCRTables(lines) {
+  // Lines that should never start or extend a table block
+  const isNonTable = text => (
+    /^EXHIBIT\s+[A-Z0-9]/i.test(text) ||
+    (isAllCaps(text) && text.length >= 3 && text.length <= 80) ||
+    /^(\d{1,2}\.)\s+/.test(text) ||
+    /^[•\-\*·]\s+/.test(text)
+  );
+
+  const blocks = [];
+  let i = 0;
+  while (i < lines.length) {
+    if (isNonTable(lines[i].text)) { i++; continue; }
+    let j = i;
+    const xsByLine = [];
+    while (j < lines.length) {
+      if (isNonTable(lines[j].text)) break;
+      const xs = lines[j].wordXs;
+      if (!xs.length) break;
+      xsByLine.push(xs);
+      const anchors = clusterAnchors(xsByLine, 20).filter(a => a.count >= 2);
+      if (j > i) {
+        const hits = anchors.filter(a => xs.some(x => Math.abs(x - a.x) <= 20)).length;
+        if (anchors.length < 2 || hits < 1) { xsByLine.pop(); break; }
+      }
+      j++;
+    }
+    const runLen = j - i;
+    if (runLen >= 2) {
+      const anchors = clusterAnchors(xsByLine, 20).filter(
+        a => a.count >= 2 && a.count >= Math.ceil(runLen * 0.5)
+      );
+      const cols = anchors.map(a => a.x).sort((a, b) => a - b);
+      // Cap at 4 cols; require ≥28px gap between columns to avoid word-level splitting
+      const wellSeparated = cols.length >= 2 && cols.length <= 4 &&
+        cols.every((c, k) => k === 0 || c - cols[k - 1] > 28);
+      if (wellSeparated) { blocks.push({ start: i, end: j, cols }); i = j; continue; }
+    }
+    i++;
+  }
+  return blocks;
+}
+
+function buildOCRTable(lines, cols) {
+  const colOf = x => {
+    let idx = 0;
+    for (let c = 0; c < cols.length; c++) if (x >= cols[c] - 20) idx = c;
+    return idx;
+  };
+  const grid = lines.map(l => {
+    const cells = Array.from({ length: cols.length }, () => []);
+    for (const w of l.words) cells[colOf(w.x)].push(w.text);
+    return cells.map(c => c.join(' ').replace(/\s+/g, ' ').trim());
+  });
+  if (grid.length < 2) return null;
+  const esc = s => s.replace(/\|/g, '\\|');
+  const hdr = grid[0];
+  const rows = [`| ${hdr.map(esc).join(' | ')} |`, `| ${hdr.map(() => '---').join(' | ')} |`];
+  for (let r = 1; r < grid.length; r++) rows.push(`| ${grid[r].map(esc).join(' | ')} |`);
+  return rows.join('\n');
+}
+
+// Detect physical ruled lines (table borders) in a binarized canvas by scanning
+// for long horizontal and vertical runs of black pixels. Returns { hLines, vLines }
+// (sorted positions at 1x scale, top-down / left-right) or null if no grid found.
+function detectRuledLines(canvas, scale) {
+  const W = canvas.width, H = canvas.height;
+  const d = canvas.getContext('2d').getImageData(0, 0, W, H).data;
+
+  const MIN_H = Math.round(W * 0.20); // horizontal rule: ≥20% of page width
+  const MIN_V = Math.round(H * 0.06); // vertical rule: ≥6% of page height
+
+  const hRows = [], vCols = [];
+  for (let y = 0; y < H; y++) {
+    let run = 0, best = 0;
+    for (let x = 0; x < W; x++) {
+      if (d[(y * W + x) * 4] < 128) { if (++run > best) best = run; } else run = 0;
+    }
+    if (best >= MIN_H) hRows.push(y);
+  }
+  for (let x = 0; x < W; x++) {
+    let run = 0, best = 0;
+    for (let y = 0; y < H; y++) {
+      if (d[(y * W + x) * 4] < 128) { if (++run > best) best = run; } else run = 0;
+    }
+    if (best >= MIN_V) vCols.push(x);
+  }
+
+  if (!hRows.length || !vCols.length) return null;
+
+  // Merge adjacent pixel positions into single line centers (handles thick borders)
+  const mergeRuns = (sorted, tol = 6) => {
+    const out = []; let g = [sorted[0]];
+    for (let i = 1; i < sorted.length; i++) {
+      if (sorted[i] - sorted[i - 1] <= tol) g.push(sorted[i]);
+      else { out.push(Math.round(g.reduce((a, b) => a + b, 0) / g.length)); g = [sorted[i]]; }
+    }
+    out.push(Math.round(g.reduce((a, b) => a + b, 0) / g.length));
+    return out;
+  };
+
+  const hLines = mergeRuns(hRows).map(y => y / scale);
+  const vLines = mergeRuns(vCols).map(x => x / scale);
+
+  if (hLines.length < 2 || vLines.length < 2) return null;
+  return { hLines, vLines };
+}
+
+// Build a markdown table by assigning OCR words to cells defined by ruled-line
+// positions. Cell assignment is purely geometric — no confidence floor — so
+// italic/low-contrast text in bordered cells is captured regardless of OCR score.
+function buildRuledTable(allWords, hLines, vLines, scale) {
+  const rows = hLines.length - 1, cols = vLines.length - 1;
+  if (rows < 1 || cols < 1) return null;
+
+  const y0 = hLines[0], y1 = hLines[hLines.length - 1];
+  const x0 = vLines[0], x1 = vLines[vLines.length - 1];
+
+  const grid = Array.from({ length: rows }, () => Array.from({ length: cols }, () => []));
+
+  for (const w of allWords) {
+    const t = w.text?.trim();
+    if (!t || /^[|\[\]]$/.test(t)) continue;
+    const wx = (w.bbox.x0 + w.bbox.x1) / 2 / scale;
+    const wy = (w.bbox.y0 + w.bbox.y1) / 2 / scale; // top-down canvas coords
+    if (wx < x0 || wx > x1 || wy < y0 || wy > y1) continue;
+
+    let row = -1, col = -1;
+    for (let r = 0; r < rows; r++) if (wy >= hLines[r] && wy < hLines[r + 1]) { row = r; break; }
+    for (let c = 0; c < cols; c++) if (wx >= vLines[c] && wx < vLines[c + 1]) { col = c; break; }
+    if (row >= 0 && col >= 0) grid[row][col].push(t);
+  }
+
+  const esc = s => s.replace(/\|/g, '\\|');
+  const hdr = grid[0].map(c => esc(c.join(' ').trim() || ' '));
+  const mdRows = [
+    `| ${hdr.join(' | ')} |`,
+    `| ${hdr.map(() => '---').join(' | ')} |`,
+  ];
+  for (let r = 1; r < rows; r++)
+    mdRows.push(`| ${grid[r].map(c => esc(c.join(' ').trim() || ' ')).join(' | ')} |`);
+
+  return { markdown: mdRows.join('\n'), y0, y1, x0, x1 };
+}
+
+// Grayscale + Otsu binarization. Runs entirely on the local canvas — no data
+// leaves the browser. Improves Tesseract accuracy on noisy/blurry/skewed scans
+// by removing scanner artifacts and producing clean black-on-white input.
+function preprocessForOCR(canvas, ctx) {
+  const { width: w, height: h } = canvas;
+  if (!w || !h) return;
+  const img = ctx.getImageData(0, 0, w, h);
+  const d = img.data;
+  const n = w * h;
+  // 1) grayscale (luminosity) + build histogram
+  const gray = new Uint8Array(n);
+  const hist = new Array(256).fill(0);
+  for (let i = 0, p = 0; i < d.length; i += 4, p++) {
+    const g = (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) | 0;
+    gray[p] = g;
+    hist[g]++;
+  }
+  // 2) Otsu's method — find threshold maximizing between-class variance
+  let sum = 0;
+  for (let t = 0; t < 256; t++) sum += t * hist[t];
+  let sumB = 0, wB = 0, maxVar = -1, threshold = 127;
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t];
+    if (wB === 0) continue;
+    const wF = n - wB;
+    if (wF === 0) break;
+    sumB += t * hist[t];
+    const mB = sumB / wB;
+    const mF = (sum - sumB) / wF;
+    const between = wB * wF * (mB - mF) * (mB - mF);
+    if (between > maxVar) { maxVar = between; threshold = t; }
+  }
+  // 3) apply threshold → pure black/white
+  for (let i = 0, p = 0; i < d.length; i += 4, p++) {
+    const v = gray[p] > threshold ? 255 : 0;
+    d[i] = d[i + 1] = d[i + 2] = v;
+    d[i + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  // 4) correct scan skew so Tesseract line-segments cleanly and column x-positions cluster
+  deskewCanvas(canvas, ctx);
+}
+
+// Projection-profile deskew. Searches ±5° in 0.5° steps on a downsampled copy,
+// picks the angle whose rotated row-sums have highest variance (sharpest peaks =
+// cleanest horizontal alignment), then applies the correction to the full canvas.
+function deskewCanvas(canvas, ctx) {
+  const W = canvas.width, H = canvas.height;
+  const SH = 350, SW = Math.round(W * SH / H);
+
+  const ref = document.createElement('canvas');
+  ref.width = SW; ref.height = SH;
+  ref.getContext('2d').drawImage(canvas, 0, 0, SW, SH);
+
+  const work = document.createElement('canvas');
+  work.width = SW; work.height = SH;
+  const wCtx = work.getContext('2d');
+
+  let bestAngle = 0, bestVar = -1;
+  for (let deg = -5; deg <= 5; deg += 0.5) {
+    wCtx.fillStyle = '#fff';
+    wCtx.fillRect(0, 0, SW, SH);
+    wCtx.save();
+    wCtx.translate(SW / 2, SH / 2);
+    wCtx.rotate(deg * Math.PI / 180);
+    wCtx.drawImage(ref, -SW / 2, -SH / 2);
+    wCtx.restore();
+    const d = wCtx.getImageData(0, 0, SW, SH).data;
+    const rowCounts = new Float32Array(SH);
+    for (let y = 0; y < SH; y++)
+      for (let x = 0; x < SW; x++)
+        if (d[(y * SW + x) * 4] < 128) rowCounts[y]++;
+    let s = 0, s2 = 0;
+    for (const v of rowCounts) { s += v; s2 += v * v; }
+    const mean = s / SH;
+    const variance = s2 / SH - mean * mean;
+    if (variance > bestVar) { bestVar = variance; bestAngle = deg; }
+  }
+
+  if (Math.abs(bestAngle) < 0.25) return;
+
+  const tmp = document.createElement('canvas');
+  tmp.width = W; tmp.height = H;
+  const tCtx = tmp.getContext('2d');
+  tCtx.fillStyle = '#fff';
+  tCtx.fillRect(0, 0, W, H);
+  tCtx.save();
+  tCtx.translate(W / 2, H / 2);
+  tCtx.rotate(-bestAngle * Math.PI / 180);
+  tCtx.drawImage(canvas, -W / 2, -H / 2);
+  tCtx.restore();
+  ctx.clearRect(0, 0, W, H);
+  ctx.drawImage(tmp, 0, 0);
 }
 
 // ─── Partial queue item re-render (avoid full re-render during conversion) ────
@@ -1021,6 +1476,21 @@ function renderResultPanel() {
   const rec = completed[state.activeIdx];
   const md  = rec?.markdown || '';
 
+  // OCR confidence badge
+  if (rec?.ocrConfidence != null) {
+    const pct = rec.ocrConfidence;
+    ocrConfEl.textContent = `OCR ${pct}%`;
+    ocrConfEl.className = pct >= 85 ? 'conf-high' : pct >= 75 ? 'conf-medium' : 'conf-low';
+    ocrConfEl.title = pct >= 85
+      ? 'Good OCR quality'
+      : pct >= 75
+        ? 'Acceptable OCR quality — review complex passages'
+        : 'Low OCR quality — verify against original document';
+    ocrConfEl.hidden = false;
+  } else {
+    ocrConfEl.hidden = true;
+  }
+
   // raw panel
   rawPanel.textContent = md;
 
@@ -1097,55 +1567,81 @@ verifyBtn.addEventListener('click', async () => {
   verifyPanelEl.hidden = !verifyPanelEl.hidden;
   if (verifyPanelEl.hidden) return;
 
-  $('verify-computed').textContent = 'Computing…';
-  $('verify-expected').textContent = 'Fetching…';
-  $('verify-status').textContent   = '…';
-  $('verify-release').textContent  = '…';
+  const computedEl = $('verify-computed');
+  const expectedEl = $('verify-expected');
+  const statusEl   = $('verify-status');
+  const releaseEl  = $('verify-release');
+  computedEl.textContent = 'Verifying…';
+  expectedEl.textContent = '…';
+  statusEl.textContent   = '…';
+  statusEl.className     = 'verify-value';
+  releaseEl.textContent  = '…';
 
-  // compute hash of loaded HTML + all scripts/styles
-  const encoder = new TextEncoder();
-  let combined  = document.documentElement.outerHTML;
+  const sha256Hex = async (buf) => {
+    const h = await crypto.subtle.digest('SHA-256', buf);
+    return Array.from(new Uint8Array(h)).map(b => b.toString(16).padStart(2, '0')).join('');
+  };
 
-  for (const script of document.querySelectorAll('script[src]')) {
-    try {
-      const r = await fetch(script.src);
-      combined += await r.text();
-    } catch {}
-  }
-  for (const link of document.querySelectorAll('link[rel="stylesheet"]')) {
-    try {
-      const r = await fetch(link.href);
-      combined += await r.text();
-    } catch {}
-  }
-
-  const hashBuf = await crypto.subtle.digest('SHA-256', encoder.encode(combined));
-  const computed = Array.from(new Uint8Array(hashBuf))
-    .map(b => b.toString(16).padStart(2, '0'))
-    .join('');
-
-  $('verify-computed').textContent = computed;
-
+  let manifest;
   try {
-    const resp     = await fetch('/release-hash.json');
-    const data     = await resp.json();
-    const expected = data.sha256 || '(not found)';
-    const releaseUrl = data.releaseUrl || '';
-
-    $('verify-expected').textContent = expected;
-    $('verify-release').innerHTML = releaseUrl
-      ? `<a href="${encodeURI(releaseUrl)}" target="_blank" rel="noopener noreferrer">${releaseUrl}</a>`
-      : '—';
-
-    const match = computed === expected;
-    const statusEl = $('verify-status');
-    statusEl.textContent = match ? '✓ MATCH' : '✗ MISMATCH';
-    statusEl.className = 'verify-value ' + (match ? 'verify-match' : 'verify-mismatch');
+    const resp = await fetch('/release-hash.json', { cache: 'no-store' });
+    manifest = await resp.json();
   } catch {
-    $('verify-expected').textContent = '(could not fetch release-hash.json)';
-    $('verify-status').textContent   = 'Unknown';
-    $('verify-release').textContent  = '—';
+    computedEl.textContent = '—';
+    expectedEl.textContent = '(could not fetch release-hash.json)';
+    statusEl.textContent   = 'Unknown';
+    return;
   }
+
+  const entries = Object.entries(manifest.files || {});
+  expectedEl.textContent = `manifest v${manifest.version || '?'} · ${manifest.algorithm || 'SHA-256'}`;
+  releaseEl.innerHTML = manifest.releaseUrl
+    ? `<a href="${encodeURI(manifest.releaseUrl)}" target="_blank" rel="noopener noreferrer">${manifest.releaseUrl}</a>`
+    : '—';
+
+  let ok = 0;
+  const mismatched = [];
+  for (let i = 0; i < entries.length; i++) {
+    const [path, expected] = entries[i];
+    computedEl.textContent = `Hashing ${i + 1} / ${entries.length}…`;
+    try {
+      const r = await fetch(path, { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const actual = await sha256Hex(await r.arrayBuffer());
+      if (actual === expected) ok++;
+      else mismatched.push(path);
+    } catch {
+      mismatched.push(path + ' (unreadable)');
+    }
+    await new Promise(res => setTimeout(res, 0)); // keep UI responsive
+  }
+
+  computedEl.textContent = `${ok} / ${entries.length} files verified`;
+  const allMatch = mismatched.length === 0 && entries.length > 0;
+  statusEl.textContent = allMatch ? '\u2713 ALL MATCH' : `\u2717 ${mismatched.length} MISMATCH`;
+  statusEl.className = 'verify-value ' + (allMatch ? 'verify-match' : 'verify-mismatch');
+  if (mismatched.length) {
+    const note = document.createElement('div');
+    note.className = 'verify-row';
+    note.style.cssText = 'flex-direction:column;align-items:flex-start;gap:2px;margin-top:6px;';
+    const lbl = document.createElement('span');
+    lbl.className = 'verify-label';
+    lbl.textContent = 'FAILED';
+    const list = document.createElement('span');
+    list.className = 'verify-value verify-mismatch';
+    list.style.cssText = 'font-size:10px;word-break:break-all;';
+    list.textContent = mismatched.slice(0, 12).join(', ') + (mismatched.length > 12 ? ` (+${mismatched.length - 12} more)` : '');
+    note.appendChild(lbl); note.appendChild(list);
+    // replace any prior failure note
+    const prior = verifyPanelEl.querySelector('.verify-failnote');
+    if (prior) prior.remove();
+    note.classList.add('verify-failnote');
+    verifyPanelEl.appendChild(note);
+  } else {
+    const prior = verifyPanelEl.querySelector('.verify-failnote');
+    if (prior) prior.remove();
+  }
+  log(`Integrity check: ${ok}/${entries.length} files verified, ${mismatched.length} mismatched`, mismatched.length ? 'error' : 'ok');
 });
 
 // ─── Mobile OCR warning ───────────────────────────────────────────────────────
