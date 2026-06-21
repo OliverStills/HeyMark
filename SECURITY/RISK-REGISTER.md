@@ -137,14 +137,14 @@ or inherent limitations that must be documented.
 |---|---|
 | Threat | T11 |
 | Finding | Phase 2 analysis |
-| Likelihood | UNKNOWN (MFA status unconfirmed) |
+| Likelihood | 2 (MFA now active; requires MFA bypass or device compromise) |
 | Impact | 5 (direct file modification; bypasses GitHub audit trail) |
-| Score | UNKNOWN — treat as HIGH until MFA confirmed |
-| Current residual | UNKNOWN |
-| Target residual after Phase 5 | LOW (MFA confirmed/enforced, access review) |
-| Owner | Oliver — must check Cloudflare account settings |
+| Score | **10** |
+| Current residual | LOW — MFA confirmed 2026-06-21; sole account holder confirmed |
+| Target residual after Phase 5 | LOW (access review documented, incident response drafted) |
+| Owner | Oliver |
 | Target phase | Phase 5 |
-| **Immediate action** | Oliver to confirm MFA status on Cloudflare Pages before Phase 3 begins |
+| **Resolved** | MFA enabled 2026-06-21. Oliver confirmed as sole account holder. |
 
 ---
 
@@ -236,7 +236,7 @@ or inherent limitations that must be documented.
 | RR-01 | Canvas memory exhaustion | 8 | 3 | Open |
 | RR-02 | OCR hang / no timeout | 6 | 3 | Open |
 | RR-03 | Large document output freeze | 6 | 3 | Open |
-| RR-08 | Compromised Cloudflare account | UNKNOWN | 5 | **Blocked — confirm MFA** |
+| RR-08 | Compromised Cloudflare account | 10 | 5 | **MFA confirmed 2026-06-21** |
 | RR-10 | Domain registrar hijack | 5 | 5 | Open |
 | RR-04 | HTML injection via preview | 4 | 3 | Open |
 | RR-13 | Manifest replacement | 4 | 6 | Open |
@@ -264,4 +264,4 @@ risk register and Oliver's Phase 2 questionnaire answers:
 13. CSP meta tag / `_headers` sync (F-05)
 14. SECURITY_LIMITS constant — single version-controlled configuration object
 
-**Pre-Phase 3 blocker:** Oliver to confirm Cloudflare Pages MFA status (RR-08).
+**Pre-Phase 3 blocker:** Cloudflare Pages MFA confirmed 2026-06-21 — blocker cleared. Phase 3 is approved to begin.

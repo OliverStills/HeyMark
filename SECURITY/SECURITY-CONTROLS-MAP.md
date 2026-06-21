@@ -201,13 +201,14 @@ SHA-256 hashes of all runtime assets are recorded at build time. The VERIFY butt
 
 ---
 
-## C14 — MFA on GitHub (confirmed)
+## C14 — MFA on GitHub and Cloudflare Pages (both confirmed)
 
 | Threat mitigated | How |
 |---|---|
 | T10 (Compromised GitHub account) | Second factor required for authentication; phishing of password alone insufficient |
+| T11 (Compromised Cloudflare account) | MFA enabled 2026-06-21; Oliver is sole account holder |
 
-**Gap:** Branch protection not confirmed. MFA type (TOTP vs hardware key) not recorded.
+**Gap:** Branch protection on GitHub not yet confirmed. MFA type (TOTP vs hardware key) not recorded for either platform.
 
 ---
 
