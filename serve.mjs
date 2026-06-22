@@ -9,6 +9,7 @@ http.createServer(async (req, res) => {
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
   res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
   res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+  res.setHeader('Cache-Control', 'no-store');
   try {
     const body = await readFile(file);
     res.setHeader('Content-Type', TYPES[extname(file)] || 'application/octet-stream');

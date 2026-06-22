@@ -1788,7 +1788,7 @@ function showAdvisoryOnce(callback) {
 
   const msg = document.createElement('p');
   msg.className = 'advisory-msg';
-  msg.textContent = ‘This file contains extracted document text. Handle it with the same care as the original. HeyMark’s privacy guarantee does not extend to tools you paste this text into.’;
+  msg.textContent = "This file contains extracted document text. Handle it with the same care as the original. HeyMark’s privacy guarantee does not extend to tools you paste this text into.";
 
   const btn = document.createElement('button');
   btn.type = 'button';

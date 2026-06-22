@@ -3,7 +3,7 @@
   "releaseUrl": "https://github.com/OliverStills/HeyMark/releases/tag/v1.1.0",
   "algorithm": "SHA-256",
   "files": {
-    "/app.js": "14f00b4e142f36e4d07ccada9152828c752d11a36feca635aaa13b5ee933c489",
+    "/app.js": "48e80019aa740132489be8ab26cc3a11bbc562e8bd8747e3c64853993c5923b7",
     "/assets/fonts/CormorantGaramond-Bold.woff2": "e15b441759854e4477fe214540848ceb993199d31c04bc59691dde7ed5621eb7",
     "/assets/fonts/CormorantGaramond-Italic.woff2": "effe3ef07d4e0d249d837344e70bdf50fc94ccc44870b02103dad9a75d4e003f",
     "/assets/fonts/CormorantGaramond-Regular.woff2": "a9ff7df676353c21f7159a220f19b7d60b53910351ae822322b5280f30664acf",
