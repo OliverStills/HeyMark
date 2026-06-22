@@ -893,6 +893,48 @@ footer a:hover { text-decoration: underline; }
   border: 0;
 }
 
+/* ---------- Advisory modal ------------------------------ */
+.advisory-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(26,20,16,.55);
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.advisory-box {
+  background: var(--parchment);
+  border: 1px solid var(--sepia-light);
+  border-radius: var(--radius);
+  padding: 28px 32px;
+  max-width: 420px;
+  width: 100%;
+  box-shadow: 0 4px 20px rgba(26,20,16,.2);
+}
+
+.advisory-title {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 12px;
+}
+
+.advisory-msg {
+  font-family: 'Libre Baskerville', serif;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--sepia-dark);
+  margin-bottom: 20px;
+}
+
+.advisory-box .btn {
+  width: 100%;
+}
+
 /* ---------- Mobile breakpoint --------------------------- */
 @media (max-width: 600px) {
   #app { padding: 0 14px 40px; }

@@ -8,10 +8,19 @@ import * as pdfjsLib from '/vendor/pdfjs/pdf.mjs';
 pdfjsLib.GlobalWorkerOptions.workerSrc = '/vendor/pdfjs/pdf.worker.mjs';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const MAX_SIZE_BYTES = 50 * 1024 * 1024;
-const MAX_PAGES      = 2000;
-const MAX_FILES      = 50;
-const VERSION        = '1.1.0';
+const SECURITY_LIMITS = {
+  maxFileBytes:             50 * 1024 * 1024,
+  maxPdfPages:              2000,
+  maxPdfPagesSoftWarn:      500,
+  maxRenderedPixelsPerPage: 40_000_000,
+  maxTotalRenderedPixels:   500_000_000,
+  maxOcrPages:              100,
+  maxConversionMs:          60_000,
+  maxOcrMsPerPage:          45_000,
+  maxOutputChars:           25_000_000,
+};
+const MAX_FILES = 50;
+const VERSION   = '1.1.0';
 
 // ─── Activity log ─────────────────────────────────────────────────────────────
 const activityEntries = [];
@@ -50,11 +59,19 @@ const COMPOUND_PREFIXES = new Set([
   'all','half','mid','off','on','near','quasi','ultra','trans','bi','tri',
 ]);
 
+const PREF_KEYS = {
+  ocr:       'heymark:ocr',
+  lang:      'heymark:lang',
+  extended:  'heymark:extended',
+  normalize: 'heymark:normalize',
+  hyphens:   'heymark:hyphens',
+};
+const ADVISORY_KEY = 'heymark:advisoryDismissed';
+
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
-  files: [],        // Array<FileRecord>
-  activeIdx: 0,     // index into completed files for result panel
-  activeTab: 'raw', // 'raw' | 'preview'
+  files: [],
+  activeIdx: 0,
   options: {
     ocr:       false,
     lang:      'eng',
@@ -90,13 +107,10 @@ const downloadZipSingle= $('download-zip-single-btn');
 const downloadZipBtn   = $('download-zip-btn');
 const clearAllBtn      = $('clear-all-btn');
 const resultPanel      = $('result-panel');
-const tabRaw           = $('tab-raw');
-const tabPreview       = $('tab-preview');
 const fileSelectorRow  = $('file-selector-row');
 const copyBtn          = $('copy-btn');
 const ocrConfEl        = $('ocr-confidence');
 const rawPanel         = $('raw-panel');
-const previewPanel     = $('preview-panel');
 const verifyBtn        = $('verify-btn');
 const verifyPanelEl    = $('verify-panel');
 const toastEl          = $('toast');
@@ -169,23 +183,27 @@ optOcr.addEventListener('change', () => {
       toast(`${noTextFiles.length} file${noTextFiles.length > 1 ? 's' : ''} re-queued for OCR`);
     }
   }
+  savePrefs();
 });
 
-optLang.addEventListener('change', () => { state.options.lang = optLang.value; });
+optLang.addEventListener('change', () => { state.options.lang = optLang.value; savePrefs(); });
 
 optExtended.addEventListener('change', () => {
   state.options.extended = optExtended.checked;
   optExtended.setAttribute('aria-checked', String(optExtended.checked));
+  savePrefs();
 });
 
 optNormalize.addEventListener('change', () => {
   state.options.normalize = optNormalize.checked;
   optNormalize.setAttribute('aria-checked', String(optNormalize.checked));
+  savePrefs();
 });
 
 optHyphens.addEventListener('change', () => {
   state.options.hyphens = optHyphens.checked;
   optHyphens.setAttribute('aria-checked', String(optHyphens.checked));
+  savePrefs();
 });
 
 // ─── File ingestion ───────────────────────────────────────────────────────────
@@ -266,7 +284,7 @@ function addFiles(files) {
     };
 
     // immediate validation
-    if (f.size > MAX_SIZE_BYTES) {
+    if (f.size > SECURITY_LIMITS.maxFileBytes) {
       rec.status = 'size-exceeded';
     }
 
@@ -346,6 +364,7 @@ function renderQueue() {
     metaEl.className = 'queue-meta';
     let metaStr = formatSize(rec.size);
     if (rec.pages) metaStr += ` · ${rec.pages} pages`;
+    if (rec.softPageWarn) metaStr += ' · ⚠ large document';
     metaEl.textContent = metaStr;
     item.appendChild(metaEl);
 
@@ -448,6 +467,25 @@ function cancelOrRemove(id) {
   updateActionsBar();
 }
 
+// ─── Security helpers ─────────────────────────────────────────────────────────
+
+function classifyPdfError(err) {
+  const msg = err?.message || '';
+  const name = err?.name || '';
+  if (/password|encrypt/i.test(msg) || name === 'PasswordException') return 'PDF is password-protected.';
+  if (/invalid|corrupt|malformed/i.test(msg) || /UnknownErrorException|InvalidPDFException/i.test(name)) return 'The file appears to be corrupted or is not a valid PDF.';
+  if (/out of memory|memory/i.test(msg)) return 'The PDF is too large to process.';
+  return 'An error occurred while processing this PDF.';
+}
+
+function sanitizeMarkdownLinks(md) {
+  return md.replace(/\[([^\]]*)\]\(([^)]*)\)/g, (match, text, url) => {
+    const trimmed = url.trim();
+    if (/^javascript:/i.test(trimmed) || /^data:text\/html/i.test(trimmed)) return `[${text}]()`;
+    return match;
+  });
+}
+
 // ─── Convert ─────────────────────────────────────────────────────────────────
 
 convertAllBtn.addEventListener('click', () => {
@@ -464,6 +502,18 @@ async function convertFile(rec) {
   renderQueue();
 
   log(`── Starting: ${rec.name} (${formatSize(rec.size)})`, 'step');
+
+  let loadingTask = null;
+  const timeoutHandle = setTimeout(() => {
+    if (rec.status === 'converting' || rec.status === 'ocr') {
+      log(`Conversion timeout after ${SECURITY_LIMITS.maxConversionMs}ms — aborting`, 'error');
+      if (rec.worker) { try { rec.worker.terminate(); } catch {} rec.worker = null; }
+      rec.status = 'failed';
+      rec.error = 'Conversion timed out — document may be too complex or too large.';
+      renderQueue();
+      updateActionsBar();
+    }
+  }, SECURITY_LIMITS.maxConversionMs);
 
   try {
     log('Reading file bytes…', 'info');
@@ -489,7 +539,8 @@ async function convertFile(rec) {
     log('Loading PDF with pdf.js…', 'info');
     let pdf;
     try {
-      pdf = await pdfjsLib.getDocument(loadParams).promise;
+      loadingTask = pdfjsLib.getDocument(loadParams);
+      pdf = await loadingTask.promise;
       log(`pdf.js loaded — ${pdf.numPages} page(s)`, 'ok');
     } catch (err) {
       if (err?.name === 'PasswordException' || err?.code === 1 || err?.code === 2) {
@@ -499,18 +550,24 @@ async function convertFile(rec) {
         updateActionsBar();
         return;
       }
-      log(`pdf.js load error: ${err?.message}`, 'error');
+      log(`pdf.js load error: ${classifyPdfError(err)}`, 'error');
       throw err;
     }
 
     const numPages = pdf.numPages;
 
-    if (numPages > MAX_PAGES) {
-      log(`Page count ${numPages} exceeds limit of ${MAX_PAGES}`, 'error');
+    if (numPages > SECURITY_LIMITS.maxPdfPages) {
+      log(`Page count ${numPages} exceeds limit of ${SECURITY_LIMITS.maxPdfPages}`, 'error');
       rec.status = 'page-exceeded';
       renderQueue();
       updateActionsBar();
       return;
+    }
+
+    if (numPages > SECURITY_LIMITS.maxPdfPagesSoftWarn) {
+      log(`Large document: ${numPages} pages — processing may be slow`, 'warn');
+      rec.softPageWarn = true;
+      renderQueue();
     }
 
     rec.pages = numPages;
@@ -523,6 +580,13 @@ async function convertFile(rec) {
       markdown = await convertStandard(rec, pdf);
     }
 
+    markdown = sanitizeMarkdownLinks(markdown);
+
+    if (markdown.length > SECURITY_LIMITS.maxOutputChars) {
+      markdown = markdown.slice(0, SECURITY_LIMITS.maxOutputChars) + '\n\n[Output truncated — document too large]';
+      log('Output truncated — exceeded maxOutputChars limit', 'warn');
+    }
+
     rec.markdown = markdown;
     rec.status = markdown.includes('No text could be extracted') ? 'no-text' : 'complete';
     rec.progress = 100;
@@ -530,10 +594,14 @@ async function convertFile(rec) {
 
   } catch (err) {
     if (rec.status === 'cancelled') { log('Cancelled by user', 'warn'); return; }
+    if (rec.status === 'failed') { return; }
     rec.status = 'failed';
-    rec.error = err?.message || 'Unknown error';
-    log(`FAILED: ${err?.message || err}`, 'error');
+    rec.error = classifyPdfError(err);
+    log(`FAILED: ${rec.error}`, 'error');
     console.error('Conversion error:', err);
+  } finally {
+    clearTimeout(timeoutHandle);
+    if (loadingTask) { try { loadingTask.destroy(); } catch {} }
   }
 
   renderQueue();
@@ -556,7 +624,7 @@ async function convertStandard(rec, pdf) {
   let allEmpty = true;
 
   for (let i = 1; i <= pdf.numPages; i++) {
-    if (rec.status === 'cancelled') return '';
+    if (rec.status === 'cancelled' || rec.status === 'failed') return '';
     rec.progress = Math.round((i / pdf.numPages) * 90);
     log(`Page ${i}/${pdf.numPages}: extracting text…`, 'info');
     renderQueueItem(rec);
@@ -871,10 +939,16 @@ async function convertWithOCR(rec, pdf) {
   rec.worker = worker;
   const pageMarkdowns = [];
   const confScores = [];
+  let totalRenderedPixels = 0;
 
   try {
     for (let i = 1; i <= pdf.numPages; i++) {
-      if (rec.status === 'cancelled') break;
+      if (rec.status === 'cancelled' || rec.status === 'failed') break;
+      if (i > SECURITY_LIMITS.maxOcrPages) {
+        log(`OCR page limit (${SECURITY_LIMITS.maxOcrPages}) reached — stopping`, 'warn');
+        pageMarkdowns.push(`[OCR stopped at page ${SECURITY_LIMITS.maxOcrPages} — document exceeds maximum OCR page count]`);
+        break;
+      }
 
       rec.status = 'ocr';
       rec.ocrPage = i;
@@ -908,9 +982,21 @@ async function convertWithOCR(rec, pdf) {
         continue;
       }
 
-      // render page to canvas at 3x scale for OCR (higher res improves accuracy
-      // on dense/skewed legal scans; preprocessing below keeps Tesseract fast).
-      const viewport = page.getViewport({ scale: 3 });
+      const rawVp = page.getViewport({ scale: 1 });
+      const rawPixels = rawVp.width * rawVp.height;
+      let ocrScale = 3;
+      if (rawPixels * ocrScale * ocrScale > SECURITY_LIMITS.maxRenderedPixelsPerPage) {
+        ocrScale = Math.sqrt(SECURITY_LIMITS.maxRenderedPixelsPerPage / rawPixels);
+        log(`Page ${i}: canvas pixel cap — scale reduced to ${ocrScale.toFixed(2)}×`, 'warn');
+      }
+      totalRenderedPixels += rawPixels * ocrScale * ocrScale;
+      if (totalRenderedPixels > SECURITY_LIMITS.maxTotalRenderedPixels) {
+        log(`Page ${i}: total pixel budget exceeded — aborting OCR`, 'error');
+        pageMarkdowns.push('[OCR aborted — document has too many large pages]');
+        page.cleanup();
+        break;
+      }
+      const viewport = page.getViewport({ scale: ocrScale });
       log(`Page ${i}: rendering canvas ${Math.round(viewport.width)}×${Math.round(viewport.height)}px…`, 'info');
       const canvas = document.createElement('canvas');
       canvas.width  = Math.round(viewport.width);
@@ -931,7 +1017,15 @@ async function convertWithOCR(rec, pdf) {
       log(`Page ${i}: blob ready (${(blob.size/1024).toFixed(0)} KB), sending to Tesseract…`, 'ok');
 
       try {
-        const result = await worker.recognize(blob);
+        const result = await Promise.race([
+          worker.recognize(blob),
+          new Promise((_, reject) =>
+            setTimeout(
+              () => reject(Object.assign(new Error('OCR timed out'), { ocrTimeout: true })),
+              SECURITY_LIMITS.maxOcrMsPerPage
+            )
+          ),
+        ]);
         const text   = result.data.text || '';
         const confNum = typeof result.data.confidence === 'number' ? result.data.confidence : null;
         const conf   = confNum != null ? confNum.toFixed(0) : '?';
@@ -956,8 +1050,13 @@ async function convertWithOCR(rec, pdf) {
         }
         pageMarkdowns.push(pageMarkdown);
       } catch (ocrErr) {
-        log(`Page ${i}: OCR recognition failed — ${ocrErr?.message}`, 'error');
-        pageMarkdowns.push(`[OCR failed — page ${i}]`);
+        if (ocrErr?.ocrTimeout) {
+          log(`Page ${i}: OCR timed out after ${SECURITY_LIMITS.maxOcrMsPerPage}ms — skipping`, 'warn');
+          pageMarkdowns.push(`[OCR timed out — page ${i}]`);
+        } else {
+          log(`Page ${i}: OCR recognition failed — ${ocrErr?.message}`, 'error');
+          pageMarkdowns.push(`[OCR failed — page ${i}]`);
+        }
       }
     }
   } finally {
@@ -1354,19 +1453,19 @@ function renderQueueItem(rec) {
 downloadMdBtn.addEventListener('click', () => {
   const completed = state.files.filter(f => f.status === 'complete');
   if (completed.length !== 1) return;
-  downloadSingle(completed[0]);
+  showAdvisoryOnce(() => downloadSingle(completed[0]));
 });
 
 downloadZipSingle.addEventListener('click', () => {
   const completed = state.files.filter(f => f.status === 'complete');
   if (completed.length !== 1) return;
-  downloadAsZip([completed[0]]);
+  showAdvisoryOnce(() => downloadAsZip([completed[0]]));
 });
 
 downloadZipBtn.addEventListener('click', () => {
   const completed = state.files.filter(f => f.status === 'complete');
   if (completed.length < 2) return;
-  downloadAsZip(completed);
+  showAdvisoryOnce(() => downloadAsZip(completed));
 });
 
 clearAllBtn.addEventListener('click', () => {
@@ -1383,7 +1482,6 @@ clearAllBtn.addEventListener('click', () => {
   resultPanel.hidden = true;
   fileQueue.innerHTML = '';
   rawPanel.textContent = '';
-  previewPanel.innerHTML = '';
 });
 
 // ─── Downloads ────────────────────────────────────────────────────────────────
@@ -1422,29 +1520,6 @@ async function downloadAsZip(recs) {
 
 // ─── Result panel ─────────────────────────────────────────────────────────────
 
-tabRaw.addEventListener('click', () => switchTab('raw'));
-tabPreview.addEventListener('click', () => switchTab('preview'));
-
-tabRaw.addEventListener('keydown', e => handleTabKey(e, tabPreview));
-tabPreview.addEventListener('keydown', e => handleTabKey(e, tabRaw));
-
-function handleTabKey(e, other) {
-  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-    e.preventDefault();
-    other.focus();
-    other.click();
-  }
-}
-
-function switchTab(tab) {
-  state.activeTab = tab;
-  tabRaw.setAttribute('aria-selected', String(tab === 'raw'));
-  tabPreview.setAttribute('aria-selected', String(tab === 'preview'));
-  tabRaw.tabIndex    = tab === 'raw'     ? 0 : -1;
-  tabPreview.tabIndex = tab === 'preview' ? 0 : -1;
-  rawPanel.hidden     = tab !== 'raw';
-  previewPanel.hidden = tab !== 'preview';
-}
 
 function renderResultPanel() {
   const completed = state.files.filter(f => f.status === 'complete');
@@ -1491,64 +1566,38 @@ function renderResultPanel() {
     ocrConfEl.hidden = true;
   }
 
-  // raw panel
   rawPanel.textContent = md;
-
-  // preview panel
-  if (!previewPanel.hidden) renderPreview(md);
 }
 
-function renderPreview(md) {
-  try {
-    const html = window.marked.parse(md, { breaks: false, gfm: true });
-    const safe = window.DOMPurify.sanitize(html, {
-      ALLOWED_TAGS: ['h1','h2','h3','h4','h5','h6','p','br','ul','ol','li',
-                     'strong','em','code','pre','blockquote','table','thead',
-                     'tbody','tr','th','td','hr','a'],
-      ALLOWED_ATTR: ['href','title'],
-      FORBID_TAGS:  ['script','style','iframe','object','embed','form','input'],
-    });
-    previewPanel.innerHTML = safe;
-  } catch {
-    previewPanel.textContent = md;
-  }
-}
-
-// also render preview when switching to it
-tabPreview.addEventListener('click', () => {
-  const completed = state.files.filter(f => f.status === 'complete');
-  const rec = completed[state.activeIdx];
-  if (rec) renderPreview(rec.markdown || '');
-});
 
 // ─── Copy to clipboard ────────────────────────────────────────────────────────
 
-copyBtn.addEventListener('click', async () => {
+copyBtn.addEventListener('click', () => {
   const completed = state.files.filter(f => f.status === 'complete');
   const rec = completed[state.activeIdx];
   if (!rec) return;
   const text = rec.markdown || '';
 
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    // fallback
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.cssText = 'position:fixed;opacity:0;';
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand('copy');
-    document.body.removeChild(ta);
-  }
-
-  copyBtn.textContent = 'COPIED ✓';
-  copyBtn.classList.add('copied');
-  toast('Copied to clipboard');
-  setTimeout(() => {
-    copyBtn.textContent = 'COPY';
-    copyBtn.classList.remove('copied');
-  }, 2000);
+  showAdvisoryOnce(async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;opacity:0;';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+    copyBtn.textContent = 'COPIED ✓';
+    copyBtn.classList.add('copied');
+    toast('Copied to clipboard');
+    setTimeout(() => {
+      copyBtn.textContent = 'COPY';
+      copyBtn.classList.remove('copied');
+    }, 2000);
+  });
 });
 
 // ─── beforeunload warning ─────────────────────────────────────────────────────
@@ -1595,9 +1644,23 @@ verifyBtn.addEventListener('click', async () => {
 
   const entries = Object.entries(manifest.files || {});
   expectedEl.textContent = `manifest v${manifest.version || '?'} · ${manifest.algorithm || 'SHA-256'}`;
-  releaseEl.innerHTML = manifest.releaseUrl
-    ? `<a href="${encodeURI(manifest.releaseUrl)}" target="_blank" rel="noopener noreferrer">${manifest.releaseUrl}</a>`
-    : '—';
+  if (manifest.releaseUrl) {
+    try {
+      const url = new URL(manifest.releaseUrl);
+      if (!['https:', 'http:'].includes(url.protocol)) throw new Error('Unexpected URL scheme');
+      const a = document.createElement('a');
+      a.href = url.href;
+      a.textContent = manifest.releaseUrl;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      releaseEl.textContent = '';
+      releaseEl.appendChild(a);
+    } catch {
+      releaseEl.textContent = manifest.releaseUrl;
+    }
+  } else {
+    releaseEl.textContent = '—';
+  }
 
   let ok = 0;
   const mismatched = [];
@@ -1652,6 +1715,100 @@ function isMobile() {
 
 // lazy: show warning when OCR starts on mobile
 const _origConvert = convertWithOCR;
+
+// ─── Preferences (localStorage) ──────────────────────────────────────────────
+
+const VALID_LANGS_SET = new Set(['eng','fra','deu','spa','ita','por','nld','pol','ces','vie']);
+
+function savePrefs() {
+  try {
+    localStorage.setItem(PREF_KEYS.ocr,       String(state.options.ocr));
+    localStorage.setItem(PREF_KEYS.lang,       state.options.lang);
+    localStorage.setItem(PREF_KEYS.extended,   String(state.options.extended));
+    localStorage.setItem(PREF_KEYS.normalize,  String(state.options.normalize));
+    localStorage.setItem(PREF_KEYS.hyphens,    String(state.options.hyphens));
+  } catch {}
+}
+
+function loadPrefs() {
+  try {
+    const ocr = localStorage.getItem(PREF_KEYS.ocr);
+    if (ocr === 'true' || ocr === 'false') {
+      state.options.ocr = ocr === 'true';
+      optOcr.checked = state.options.ocr;
+      optOcr.setAttribute('aria-checked', ocr);
+      ocrNote.hidden = !state.options.ocr;
+    }
+    const lang = localStorage.getItem(PREF_KEYS.lang);
+    if (lang && VALID_LANGS_SET.has(lang)) {
+      state.options.lang = lang;
+      optLang.value = lang;
+    }
+    const extended = localStorage.getItem(PREF_KEYS.extended);
+    if (extended === 'true' || extended === 'false') {
+      state.options.extended = extended !== 'false';
+      optExtended.checked = state.options.extended;
+      optExtended.setAttribute('aria-checked', extended);
+    }
+    const normalize = localStorage.getItem(PREF_KEYS.normalize);
+    if (normalize === 'true' || normalize === 'false') {
+      state.options.normalize = normalize !== 'false';
+      optNormalize.checked = state.options.normalize;
+      optNormalize.setAttribute('aria-checked', normalize);
+    }
+    const hyphens = localStorage.getItem(PREF_KEYS.hyphens);
+    if (hyphens === 'true' || hyphens === 'false') {
+      state.options.hyphens = hyphens !== 'false';
+      optHyphens.checked = state.options.hyphens;
+      optHyphens.setAttribute('aria-checked', hyphens);
+    }
+  } catch {}
+}
+
+// ─── Copy/download advisory ───────────────────────────────────────────────────
+
+function showAdvisoryOnce(callback) {
+  try {
+    if (localStorage.getItem(ADVISORY_KEY) === 'true') { callback?.(); return; }
+  } catch { callback?.(); return; }
+
+  const overlay = document.createElement('div');
+  overlay.className = 'advisory-overlay';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-labelledby', 'advisory-msg-title');
+
+  const box = document.createElement('div');
+  box.className = 'advisory-box';
+
+  const title = document.createElement('p');
+  title.id = 'advisory-msg-title';
+  title.className = 'advisory-title';
+  title.textContent = 'Before you share this file';
+
+  const msg = document.createElement('p');
+  msg.className = 'advisory-msg';
+  msg.textContent = ‘This file contains extracted document text. Handle it with the same care as the original. HeyMark’s privacy guarantee does not extend to tools you paste this text into.’;
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn btn-primary';
+  btn.textContent = 'Got it';
+  btn.addEventListener('click', () => {
+    try { localStorage.setItem(ADVISORY_KEY, 'true'); } catch {}
+    overlay.remove();
+    callback?.();
+  });
+
+  box.appendChild(title);
+  box.appendChild(msg);
+  box.appendChild(btn);
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+  btn.focus();
+}
+
+loadPrefs();
 
 // ─── Keyboard: drop zone ──────────────────────────────────────────────────────
 

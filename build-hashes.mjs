@@ -19,7 +19,8 @@ const RELEASE_URL = 'https://github.com/OliverStills/HeyMark/releases/tag/v1.1.0
 // Runtime-served roots. Everything the browser actually loads/executes.
 const INCLUDE_FILES = ['index.html', 'app.js', 'styles.css', 'verify/index.html'];
 const INCLUDE_DIRS  = ['vendor', 'assets/fonts', 'assets/tessdata'];
-const EXCLUDE = new Set(['release-hash.json']);
+// vendor/dompurify and vendor/marked are no longer loaded at runtime (Preview tab removed)
+const EXCLUDE = new Set(['release-hash.json', 'vendor/dompurify', 'vendor/marked']);
 
 function walk(dir, acc = []) {
   for (const name of readdirSync(join(ROOT, dir))) {

@@ -14,20 +14,19 @@
     style-src 'self';
     font-src 'self';
     img-src 'self' data: blob:;
-    connect-src 'self' blob: data:;
+    connect-src 'self' blob:;
     worker-src 'self' blob:;
     form-action 'none';
     base-uri 'none';
     frame-ancestors 'none';
     object-src 'none';
+    upgrade-insecure-requests;
   ">
 
   <link rel="stylesheet" href="/styles.css">
 
   <!-- UMD libraries — no defer so globals land before the module script runs -->
   <script src="/vendor/jszip/jszip.min.js"></script>
-  <script src="/vendor/dompurify/purify.min.js"></script>
-  <script src="/vendor/marked/marked.min.js"></script>
 </head>
 <body>
 <div id="app">
@@ -159,15 +158,6 @@
   <!-- ===== RESULT PANEL ===== -->
   <section id="result-panel" aria-label="Conversion result" hidden>
 
-    <div class="result-tabs" role="tablist" aria-label="Result view">
-      <button class="tab-btn" role="tab" id="tab-raw" aria-selected="true" aria-controls="raw-panel" tabindex="0">
-        RAW MARKDOWN
-      </button>
-      <button class="tab-btn" role="tab" id="tab-preview" aria-selected="false" aria-controls="preview-panel" tabindex="-1">
-        PREVIEW
-      </button>
-    </div>
-
     <div id="file-selector-row" class="file-selector-row" role="toolbar" aria-label="Select file to view" hidden></div>
 
     <div class="panel-header">
@@ -175,8 +165,7 @@
       <button class="btn" id="copy-btn" type="button" aria-label="Copy markdown to clipboard">COPY</button>
     </div>
 
-    <div id="raw-panel" role="tabpanel" aria-labelledby="tab-raw" tabindex="0"></div>
-    <div id="preview-panel" role="tabpanel" aria-labelledby="tab-preview" tabindex="0" hidden></div>
+    <div id="raw-panel" tabindex="0"></div>
 
   </section>
 
