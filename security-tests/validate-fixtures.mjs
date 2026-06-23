@@ -44,6 +44,7 @@ const required = [
   'encrypted.pdf',
   'valid-text.pdf',
   'valid-scanned.pdf',
+  'encrypted-pw-heymark.pdf',
 ];
 for (const name of required) {
   test(`${name} exists`, () => assert(exists(name), `not found in ${FIXTURES}`));
@@ -103,6 +104,18 @@ test('valid-scanned: /Image XObject present', () =>
 
 test('valid-scanned: no text operators (image-only)', () =>
   assert(!readStr('valid-scanned.pdf').includes(' Tj'), 'scanned fixture must have no text layer'));
+
+test('encrypted-pw-heymark: /Encrypt present', () =>
+  assert(readStr('encrypted-pw-heymark.pdf').includes('/Encrypt'), 'expected /Encrypt reference'));
+
+test('encrypted-pw-heymark: /ID array present', () =>
+  assert(readStr('encrypted-pw-heymark.pdf').includes('/ID'), 'expected /ID in trailer'));
+
+test('encrypted-pw-heymark: V=1 R=2 standard encryption', () => {
+  const s = readStr('encrypted-pw-heymark.pdf');
+  assert(s.includes('/V 1'), 'expected /V 1');
+  assert(s.includes('/R 2'), 'expected /R 2');
+});
 
 // ── Size sanity ───────────────────────────────────────────────────────────────
 
