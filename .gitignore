@@ -5,3 +5,10 @@ verify/.DS_Store
 # Large generated test fixture — regenerate with:
 # node -e "const b=Buffer.alloc(51*1024*1024,0x41);b.write('%PDF-',0,'ascii');require('fs').writeFileSync('security-tests/fixtures/pdf/oversized.pdf',b)"
 security-tests/fixtures/pdf/oversized.pdf
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example
