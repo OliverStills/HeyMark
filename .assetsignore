@@ -19,6 +19,13 @@ claude.md
 heymark-v1.1.0.patch
 *.patch
 
+# Wrangler build artifacts
+.wrangler/
+wrangler.jsonc
+
+# Git internals — not web content
+.git/
+
 # OS and version control metadata
 .DS_Store
 .gitignore
