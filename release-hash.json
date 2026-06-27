@@ -28,6 +28,6 @@
     "/vendor/tesseract/tesseract-core-simd-lstm.wasm": "93c9afba9a946d18630a4f130d71615de6251617f583d810bae1a5b0fa28d8a3",
     "/vendor/tesseract/tesseract.esm.min.js": "2537be686335e4b2637e933cdc85a52dd80267a592689c1bd63235c8591540ae",
     "/vendor/tesseract/worker.min.js": "aca1229639fc9907d86f96e825955a2b7c5716d17f3bc3acd71f9c7ab66181fc",
-    "/verify/index.html": "9d18d330427500d99a2932b8e5743589c111915612702cce4ff146747d8b096d"
+    "/verify/index.html": "87d10c46a2662d18eadcee6b57eb62bf30fcc038a9aa592dc83571ed3875110b"
   }
 }
