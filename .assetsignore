@@ -1,0 +1,25 @@
+# Build tools and dependencies — not web assets
+node_modules/
+package.json
+package-lock.json
+
+# Test suite — not public-facing
+security-tests/
+
+# CI configuration
+.github/
+
+# Build and dev scripts
+build-hashes.mjs
+serve.mjs
+playwright.config.mjs
+
+# Internal / dev files
+claude.md
+heymark-v1.1.0.patch
+*.patch
+
+# OS and version control metadata
+.DS_Store
+.gitignore
+.gitattributes
