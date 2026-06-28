@@ -491,7 +491,7 @@ function classifyPdfError(err) {
 // ─── DOCX pipeline ────────────────────────────────────────────────────────────
 
 async function validateDocxFormat(buf) {
-  const { default: JSZip } = await import('/vendor/jszip/jszip.min.js');
+  const JSZip = window.JSZip; // loaded as UMD global via <script> in index.html
   let zip;
   try {
     zip = await JSZip.loadAsync(buf);
