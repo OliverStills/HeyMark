@@ -48,7 +48,7 @@
     <h1>Security &amp; Privacy</h1>
     <p class="version-line">Version 1.1.0 &nbsp;·&nbsp; Last reviewed 2026-06-27</p>
 
-    <p class="lede">HeyMark converts PDF documents to Markdown in your browser. Your documents are never uploaded to any server. This page explains how that works, what it means in practice, and where the limits of that guarantee are.</p>
+    <p class="lede">HeyMark converts PDF and DOCX documents to Markdown in your browser. Your documents are never uploaded to any server. This page explains how that works, what it means in practice, and where the limits of that guarantee are.</p>
 
     <nav class="toc" aria-label="Table of contents">
       <p>Contents</p>
@@ -87,6 +87,14 @@
       <li>For scanned PDFs: each page is rendered to a canvas, then Tesseract.js — an OCR engine running as a local WebAssembly Web Worker — recognizes the text.</li>
       <li>The Markdown result is displayed in your browser.</li>
     </ol>
+    <p>When you convert a DOCX:</p>
+    <ol>
+      <li>Your browser reads the file into memory using the FileReader API.</li>
+      <li>The ZIP structure and Office Open XML content types are validated to confirm the file is a genuine Word document.</li>
+      <li>Mammoth.js — running in an isolated Web Worker — converts the DOCX XML to HTML.</li>
+      <li>The HTML is sanitized using DOMPurify on the main thread, then converted to Markdown by an internal serializer.</li>
+      <li>The Markdown result is displayed in your browser.</li>
+    </ol>
     <p>Every step runs on your device. No step sends anything over the network.</p>
 
     <!-- ─── NETWORK ─── -->
@@ -101,7 +109,7 @@
     <p>If you click VERIFY in the footer, HeyMark re-fetches each runtime asset from the same origin to hash and compare against the published manifest. No document content is involved.</p>
 
     <h3>How to confirm this yourself</h3>
-    <p>Open DevTools (<code>F12</code>), go to the Network tab, upload a PDF, and convert it. Every request should go only to <code>heymark.io</code> (or <code>heymark.pages.dev</code>). There should be zero requests to any other origin during or after conversion.</p>
+    <p>Open DevTools (<code>F12</code>), go to the Network tab, upload a PDF or DOCX, and convert it. Every request should go only to <code>heymark.io</code> (or <code>heymark.pages.dev</code>). There should be zero requests to any other origin during or after conversion.</p>
 
     <!-- ─── NOT COLLECTED ─── -->
     <h2 id="not-collected">What is not collected</h2>
@@ -121,7 +129,7 @@
     <h2 id="memory">Memory and cleanup</h2>
     <p>While a conversion is running, the document exists in browser memory as an <code>ArrayBuffer</code>. After conversion, when you reset the app or start a new file, HeyMark:</p>
     <ul>
-      <li>Terminates the pdf.js and Tesseract Web Workers</li>
+      <li>Terminates the pdf.js, Tesseract, and DOCX Web Workers</li>
       <li>Revokes all object URLs (<code>URL.revokeObjectURL</code>)</li>
       <li>Clears the file input and removes queue entries</li>
       <li>Drops references to the source buffer, extracted text, and generated Markdown</li>
@@ -159,7 +167,7 @@
         </tr>
         <tr>
           <td>File format validation</td>
-          <td>Only files beginning with the PDF magic bytes (<code>%PDF-</code>) are accepted</td>
+          <td>PDF files are validated against magic bytes (<code>%PDF-</code>); DOCX files are validated as ZIP archives with Office Open XML content types — XLSX, PPTX, and macro-enabled DOCM are rejected</td>
           <td>Automated</td>
         </tr>
         <tr>
@@ -174,12 +182,12 @@
         </tr>
         <tr>
           <td>URL sanitization</td>
-          <td>Hyperlinks extracted from PDFs are filtered: <code>javascript:</code>, <code>vbscript:</code>, <code>data:text/html</code>, and similar protocols are removed</td>
+          <td>Hyperlinks extracted from PDFs and DOCX files are filtered: <code>javascript:</code>, <code>vbscript:</code>, <code>data:text/html</code>, and similar protocols are removed</td>
           <td>Automated</td>
         </tr>
         <tr>
           <td>Worker isolation</td>
-          <td>PDF parsing and OCR run in isolated Web Workers that are terminated after each conversion</td>
+          <td>PDF parsing, OCR, and DOCX conversion each run in isolated Web Workers that are terminated after each conversion</td>
           <td>Automated</td>
         </tr>
         <tr>
@@ -216,7 +224,9 @@
       <tbody>
         <tr><td>pdf.js</td><td>4.10.38</td><td>Apache-2.0</td><td>PDF parsing and text extraction</td></tr>
         <tr><td>Tesseract.js</td><td>5.1.1</td><td>Apache-2.0</td><td>In-browser OCR for scanned PDFs</td></tr>
-        <tr><td>JSZip</td><td>3.10.1</td><td>MIT</td><td>ZIP packaging for multi-file downloads</td></tr>
+        <tr><td>JSZip</td><td>3.10.1</td><td>MIT</td><td>ZIP packaging for multi-file downloads; DOCX structure validation</td></tr>
+        <tr><td>Mammoth.js</td><td>1.12.0</td><td>BSD 2-Clause</td><td>DOCX → HTML conversion inside an isolated Web Worker</td></tr>
+        <tr><td>DOMPurify</td><td>3.2.4</td><td>Apache-2.0 / MPL-2.0</td><td>HTML sanitization of Mammoth output in the DOCX pipeline</td></tr>
       </tbody>
     </table>
     <p>All libraries are vendored under <code>vendor/</code> and served same-origin. No library is loaded from a CDN. Full inventory with SHA-256 hashes: <a href="https://github.com/OliverStills/HeyMark/blob/main/SECURITY/SBOM.md" rel="noopener noreferrer" target="_blank">SECURITY/SBOM.md ↗</a></p>
@@ -257,8 +267,10 @@
         <tr><td>PDF (text)</td><td class="tag-yes">Supported</td><td>Heading, table, and list detection</td></tr>
         <tr><td>PDF (scanned / image-only)</td><td class="tag-yes">Supported (OCR mode)</td><td>Enable OCR Mode before converting</td></tr>
         <tr><td>PDF (password-protected)</td><td class="tag-no">Not supported</td><td>Encrypted PDFs are rejected with an error</td></tr>
-        <tr><td>DOCX, XLSX, PPTX</td><td class="tag-no">Not yet</td><td>On the roadmap</td></tr>
-        <tr><td>Images (PNG, JPG)</td><td class="tag-no">Not supported</td><td>Upload PDFs only</td></tr>
+        <tr><td>DOCX</td><td class="tag-yes">Supported</td><td>Headings, lists, tables, tracked-change warnings; images omitted</td></tr>
+        <tr><td>DOCM (macro-enabled)</td><td class="tag-no">Rejected</td><td>Macro-enabled documents are rejected at validation</td></tr>
+        <tr><td>XLSX, PPTX</td><td class="tag-no">Not supported</td><td>Rejected if renamed as .docx; native support not planned</td></tr>
+        <tr><td>Images (PNG, JPG)</td><td class="tag-no">Not supported</td><td>Upload PDFs or DOCX files</td></tr>
       </tbody>
     </table>
 

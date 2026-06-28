@@ -1,7 +1,7 @@
 # HeyMark — Software Bill of Materials (SBOM)
 
-**Version:** 1.1.0
-**Date:** 2026-06-24
+**Version:** 1.2.0
+**Date:** 2026-06-27
 **Format:** Manual inventory (no runtime npm; all dependencies vendored)
 
 All runtime dependencies are vendored under `vendor/` and served same-origin.
@@ -88,6 +88,52 @@ vendor/jszip/jszip.min.js acc7e41455a80765b5fd9c7ee1b8078a6d160bbbca455aeae854de
 
 ---
 
+---
+
+### Mammoth.js
+
+| Field | Value |
+|---|---|
+| Name | Mammoth.js |
+| Version | 1.12.0 |
+| Upstream | https://github.com/mwilliamson/mammoth.js |
+| License | BSD 2-Clause |
+| Vendored paths | `vendor/mammoth/mammoth.browser.min.js` |
+| Purpose | DOCX → HTML conversion inside an isolated Web Worker |
+| Privileges | Reads ArrayBuffer of uploaded DOCX; no DOM access; runs in worker |
+| Last reviewed | 2026-06-27 |
+| Update source | https://github.com/mwilliamson/mammoth.js/releases |
+| Known CVEs | None at time of review |
+
+**SHA-256 hashes:**
+```
+vendor/mammoth/mammoth.browser.min.js 5d4c0e7c9165d70b78f789c5274a2c7846d9e1c06ec19b69afa6ef45f789a3b9
+```
+
+---
+
+### DOMPurify
+
+| Field | Value |
+|---|---|
+| Name | DOMPurify |
+| Version | 3.2.4 |
+| Upstream | https://github.com/cure53/DOMPurify |
+| License | Apache-2.0 / MPL-2.0 |
+| Vendored paths | `vendor/dompurify/purify.min.js` |
+| Purpose | Sanitizes Mammoth HTML output before DOM parsing in DOCX pipeline |
+| Privileges | Processes HTML string in main thread using a sandboxed document; no network access |
+| Last reviewed | 2026-06-27 |
+| Update source | https://github.com/cure53/DOMPurify/releases |
+| Known CVEs | None at time of review |
+
+**SHA-256 hashes:**
+```
+vendor/dompurify/purify.min.js 8eb41b658831fab175fad9bcd00fcb2d84e0ed3a25a55053d4ecd4444b8b43a0
+```
+
+---
+
 ## Vendored but not loaded at runtime
 
 These libraries are present in the repository but are not imported by `app.js`
@@ -95,7 +141,6 @@ or `index.html`. They are excluded from the integrity manifest.
 
 | Name | Version | License | Reason not used |
 |---|---|---|---|
-| DOMPurify | 3.2.4 | Apache-2.0 / MPL-2.0 | Preview tab removed in v1.1.0; raw Markdown displayed with `textContent` |
 | marked | 15.0.12 | MIT | Preview tab removed in v1.1.0 |
 
 ---

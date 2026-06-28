@@ -139,3 +139,29 @@ described in `SECURITY/SECURITY-CONTROLS.md` are self-assessed and backed by
 automated tests but have not been validated by a third-party security firm.
 
 **Status:** On the roadmap for a future release.
+
+---
+
+## L-11 — DOCX limitations
+
+DOCX conversion uses Mammoth.js running in an isolated Web Worker. The following
+DOCX features are not supported or have reduced fidelity:
+
+- **Macro-enabled documents (.docm):** Rejected at the format validation layer.
+  HeyMark checks the `[Content_Types].xml` for `macroenabled` and refuses the
+  file with an error.
+- **Embedded images:** Images inside DOCX files are not extracted or included in
+  Markdown output. A warning is prepended to the output noting how many images
+  were omitted.
+- **Tracked changes:** Tracked insertions/deletions in the DOCX are converted to
+  plain text by Mammoth (insertions rendered, deletions omitted). A warning is
+  prepended advising the user that tracked-change markup is not reflected
+  in the output.
+- **Comments and annotations:** Document comments are stripped during conversion.
+- **Complex layouts:** Multi-column layouts, text boxes, and floating objects may
+  not convert with full fidelity.
+- **Password-protected DOCX:** Encrypted DOCX files cannot be converted.
+  Mammoth will return an error; HeyMark surfaces this to the user.
+
+**Implication:** DOCX conversion output should be reviewed against the source
+document, particularly for files that contain tracked changes or embedded images.

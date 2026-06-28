@@ -4,15 +4,18 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test:unit":     "node tests/phase3.test.mjs",
-    "test:fixtures": "node security-tests/validate-fixtures.mjs",
-    "test:static":   "node security-tests/static-checks.mjs",
-    "test:csp":      "node security-tests/csp-check.mjs",
-    "test:browser":  "playwright test",
-    "test":          "npm run test:unit && npm run test:fixtures && npm run test:static && npm run test:csp && npm run test:browser",
-    "fixtures":      "node security-tests/create-fixtures.mjs"
+    "test:unit":          "node tests/phase3.test.mjs",
+    "test:fixtures":      "node security-tests/validate-fixtures.mjs",
+    "test:fixtures:docx": "node security-tests/validate-docx-fixtures.mjs",
+    "test:static":        "node security-tests/static-checks.mjs",
+    "test:csp":           "node security-tests/csp-check.mjs",
+    "test:browser":       "playwright test",
+    "test":               "npm run test:unit && npm run test:fixtures && npm run test:fixtures:docx && npm run test:static && npm run test:csp && npm run test:browser",
+    "fixtures":           "node security-tests/create-fixtures.mjs",
+    "fixtures:docx":      "node security-tests/create-docx-fixtures.mjs"
   },
   "devDependencies": {
-    "@playwright/test": "^1.48.0"
+    "@playwright/test": "^1.48.0",
+    "jszip": "^3.10.1"
   }
 }

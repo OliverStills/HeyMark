@@ -18,6 +18,13 @@ const SECURITY_LIMITS = {
   maxConversionMs:          60_000,
   maxOcrMsPerPage:          45_000,
   maxOutputChars:           25_000_000,
+  docx: {
+    maxEntries:            5000,
+    maxUncompressedBytes:  250 * 1024 * 1024,
+    maxSingleEntryBytes:    50 * 1024 * 1024,
+    maxCompressionRatio:   100,
+    maxImages:            1000,
+  },
 };
 const MAX_FILES = 50;
 const VERSION   = '1.1.0';
@@ -297,17 +304,20 @@ function addFiles(files) {
 // ─── Queue rendering ─────────────────────────────────────────────────────────
 
 const STATUS_META = {
-  'queued':        { cls: 'status-queued',     label: 'QUEUED',             aria: 'Queued' },
-  'converting':    { cls: 'status-converting', label: 'CONVERTING…',        aria: 'Converting' },
-  'ocr':           { cls: 'status-converting', label: 'OCR…',               aria: 'OCR processing' },
-  'complete':      { cls: 'status-complete',   label: 'COMPLETE',           aria: 'Conversion complete' },
-  'failed':        { cls: 'status-failed',     label: 'FAILED',             aria: 'Conversion failed' },
-  'cancelled':     { cls: 'status-cancelled',  label: 'CANCELLED',          aria: 'Cancelled by user' },
-  'size-exceeded': { cls: 'status-failed',     label: 'EXCEEDS 50 MB',      aria: 'File exceeds 50 megabyte limit' },
-  'page-exceeded': { cls: 'status-failed',     label: 'EXCEEDS 2000 PAGES', aria: 'File exceeds 2000 page limit' },
-  'invalid-pdf':   { cls: 'status-failed',     label: 'INVALID PDF',        aria: 'Not a valid PDF file' },
-  'encrypted':     { cls: 'status-failed',     label: 'PASSWORD REQUIRED',  aria: 'PDF is password protected' },
-  'no-text':       { cls: 'status-failed',     label: 'NO TEXT — TRY OCR',  aria: 'No text extracted — enable OCR mode and re-convert' },
+  'queued':           { cls: 'status-queued',     label: 'QUEUED',             aria: 'Queued' },
+  'converting':       { cls: 'status-converting', label: 'CONVERTING…',        aria: 'Converting' },
+  'ocr':              { cls: 'status-converting', label: 'OCR…',               aria: 'OCR processing' },
+  'docx':             { cls: 'status-converting', label: 'READING DOCX…',      aria: 'Reading DOCX document' },
+  'complete':         { cls: 'status-complete',   label: 'COMPLETE',           aria: 'Conversion complete' },
+  'failed':           { cls: 'status-failed',     label: 'FAILED',             aria: 'Conversion failed' },
+  'cancelled':        { cls: 'status-cancelled',  label: 'CANCELLED',          aria: 'Cancelled by user' },
+  'size-exceeded':    { cls: 'status-failed',     label: 'EXCEEDS 50 MB',      aria: 'File exceeds 50 megabyte limit' },
+  'page-exceeded':    { cls: 'status-failed',     label: 'EXCEEDS 2000 PAGES', aria: 'File exceeds 2000 page limit' },
+  'invalid-pdf':      { cls: 'status-failed',     label: 'INVALID PDF',        aria: 'Not a valid PDF file' },
+  'invalid-format':   { cls: 'status-failed',     label: 'UNSUPPORTED FORMAT', aria: 'File format not supported' },
+  'invalid-docx':     { cls: 'status-failed',     label: 'INVALID DOCX',       aria: 'Not a valid DOCX file' },
+  'encrypted':        { cls: 'status-failed',     label: 'PASSWORD REQUIRED',  aria: 'PDF is password protected' },
+  'no-text':          { cls: 'status-failed',     label: 'NO TEXT — TRY OCR',  aria: 'No text extracted — enable OCR mode and re-convert' },
 };
 
 function renderQueue() {
@@ -478,6 +488,300 @@ function classifyPdfError(err) {
   return 'An error occurred while processing this PDF.';
 }
 
+// ─── DOCX pipeline ────────────────────────────────────────────────────────────
+
+async function validateDocxFormat(buf) {
+  const { default: JSZip } = await import('/vendor/jszip/jszip.min.js');
+  let zip;
+  try {
+    zip = await JSZip.loadAsync(buf);
+  } catch {
+    throw Object.assign(new Error('Not a valid ZIP archive'), { docxCode: 'invalid-docx' });
+  }
+
+  const entries = Object.keys(zip.files);
+  if (entries.length > SECURITY_LIMITS.docx.maxEntries) {
+    throw Object.assign(new Error(`Archive has too many entries (${entries.length})`), { docxCode: 'invalid-docx' });
+  }
+
+  const ctFile = zip.file('[Content_Types].xml');
+  if (!ctFile) {
+    throw Object.assign(new Error('Missing [Content_Types].xml — not a valid Office document'), { docxCode: 'invalid-docx' });
+  }
+
+  const ct = await ctFile.async('text');
+
+  if (ct.includes('spreadsheetml')) {
+    throw Object.assign(new Error('XLSX spreadsheets are not supported. Convert to PDF first.'), { docxCode: 'invalid-docx' });
+  }
+  if (ct.includes('presentationml')) {
+    throw Object.assign(new Error('PPTX presentations are not supported. Convert to PDF first.'), { docxCode: 'invalid-docx' });
+  }
+  if (ct.includes('macro') || ct.includes('macroenabled') || zip.file('word/vbaProject.bin')) {
+    throw Object.assign(new Error('Macro-enabled documents (DOCM) are not supported.'), { docxCode: 'invalid-docx' });
+  }
+  if (!ct.includes('wordprocessingml')) {
+    throw Object.assign(new Error('ZIP file is not a Word document.'), { docxCode: 'invalid-docx' });
+  }
+  if (!zip.file('word/document.xml')) {
+    throw Object.assign(new Error('Missing word/document.xml — not a valid DOCX.'), { docxCode: 'invalid-docx' });
+  }
+}
+
+function sanitizeDocxHtml(html) {
+  // Parse the raw HTML string safely; never assign to innerHTML directly
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+
+  const ALLOWED = new Set(['H1','H2','H3','H4','H5','H6','P','BR','HR',
+    'STRONG','B','EM','I','U','DEL','S','A',
+    'UL','OL','LI','TABLE','THEAD','TBODY','TR','TH','TD',
+    'BLOCKQUOTE','PRE','CODE']);
+
+  const SAFE_PROTOCOLS = new Set(['https:', 'http:', 'mailto:']);
+
+  function clean(node) {
+    const toRemove = [];
+    for (const child of node.childNodes) {
+      if (child.nodeType === Node.ELEMENT_NODE) {
+        if (!ALLOWED.has(child.tagName)) {
+          // replace with its text content
+          const text = document.createTextNode(child.textContent);
+          node.insertBefore(text, child);
+          toRemove.push(child);
+          continue;
+        }
+        // strip all attributes except href on <a>
+        const attrsToRemove = [];
+        for (const attr of child.attributes) {
+          if (child.tagName === 'A' && attr.name === 'href') {
+            try {
+              const url = new URL(attr.value);
+              if (!SAFE_PROTOCOLS.has(url.protocol)) attrsToRemove.push(attr.name);
+            } catch { attrsToRemove.push(attr.name); }
+          } else {
+            attrsToRemove.push(attr.name);
+          }
+        }
+        for (const a of attrsToRemove) child.removeAttribute(a);
+        clean(child);
+      }
+    }
+    for (const el of toRemove) el.remove();
+  }
+
+  clean(doc.body);
+  return doc.body;
+}
+
+function domToMarkdown(node, depth = 0) {
+  const parts = [];
+
+  function walk(n, ctx) {
+    if (n.nodeType === Node.TEXT_NODE) {
+      const t = n.textContent;
+      if (t) parts.push(ctx.inline ? t : t.trim());
+      return;
+    }
+    if (n.nodeType !== Node.ELEMENT_NODE) return;
+
+    const tag = n.tagName;
+
+    if (/^H([1-6])$/.test(tag)) {
+      const level = parseInt(tag[1]);
+      const prefix = '#'.repeat(level);
+      const text = n.textContent.trim();
+      if (text) { parts.push(`\n${prefix} ${text}\n`); }
+      return;
+    }
+    if (tag === 'P') {
+      const text = n.textContent.trim();
+      if (text) { parts.push(`\n${text}\n`); }
+      return;
+    }
+    if (tag === 'BR') { parts.push('\n'); return; }
+    if (tag === 'HR') { parts.push('\n---\n'); return; }
+    if (tag === 'STRONG' || tag === 'B') {
+      const t = n.textContent.trim();
+      if (t) parts.push(`**${t}**`);
+      return;
+    }
+    if (tag === 'EM' || tag === 'I') {
+      const t = n.textContent.trim();
+      if (t) parts.push(`*${t}*`);
+      return;
+    }
+    if (tag === 'DEL' || tag === 'S') {
+      const t = n.textContent.trim();
+      if (t) parts.push(`~~${t}~~`);
+      return;
+    }
+    if (tag === 'CODE') {
+      const t = n.textContent;
+      if (t) parts.push(`\`${t}\``);
+      return;
+    }
+    if (tag === 'PRE') {
+      const t = n.textContent;
+      if (t) parts.push(`\n\`\`\`\n${t}\n\`\`\`\n`);
+      return;
+    }
+    if (tag === 'BLOCKQUOTE') {
+      const t = n.textContent.trim();
+      if (t) parts.push('\n' + t.split('\n').map(l => `> ${l}`).join('\n') + '\n');
+      return;
+    }
+    if (tag === 'A') {
+      const href = n.getAttribute('href') || '';
+      const t = n.textContent.trim();
+      if (t && href) parts.push(`[${t}](${href})`);
+      else if (t) parts.push(t);
+      return;
+    }
+    if (tag === 'UL') {
+      parts.push('\n');
+      for (const li of n.querySelectorAll(':scope > li')) {
+        const t = li.textContent.trim();
+        if (t) parts.push(`- ${t}\n`);
+      }
+      parts.push('\n');
+      return;
+    }
+    if (tag === 'OL') {
+      parts.push('\n');
+      let i = 1;
+      for (const li of n.querySelectorAll(':scope > li')) {
+        const t = li.textContent.trim();
+        if (t) parts.push(`${i++}. ${t}\n`);
+      }
+      parts.push('\n');
+      return;
+    }
+    if (tag === 'TABLE') {
+      parts.push('\n');
+      const rows = Array.from(n.querySelectorAll('tr'));
+      if (!rows.length) return;
+      const cells = (tr) => Array.from(tr.querySelectorAll('th,td')).map(c => c.textContent.trim().replace(/\|/g, '\\|'));
+      const header = cells(rows[0]);
+      parts.push('| ' + header.join(' | ') + ' |\n');
+      parts.push('| ' + header.map(() => '---').join(' | ') + ' |\n');
+      for (const row of rows.slice(1)) {
+        const c = cells(row);
+        if (c.some(v => v)) parts.push('| ' + c.join(' | ') + ' |\n');
+      }
+      parts.push('\n');
+      return;
+    }
+    // recurse into container elements
+    for (const child of n.childNodes) walk(child, ctx);
+  }
+
+  walk(node, { inline: false });
+  return parts.join('').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+async function convertDocx(rec, buf) {
+  rec.status = 'docx';
+  renderQueue();
+
+  // 1 — validate archive format
+  log('Validating DOCX archive structure…', 'info');
+  try {
+    await validateDocxFormat(buf);
+  } catch (err) {
+    log(`DOCX validation failed: ${err.message}`, 'error');
+    rec.status = err.docxCode || 'invalid-docx';
+    rec.error  = err.message;
+    return null;
+  }
+  log('DOCX format valid', 'ok');
+
+  // 2 — run Mammoth in a Web Worker
+  log('Starting Mammoth DOCX worker…', 'info');
+  return new Promise((resolve) => {
+    const worker = new Worker('/docx-worker.js');
+    rec.worker = worker;
+
+    const id = Date.now();
+    const timeout = setTimeout(() => {
+      log('DOCX worker timed out', 'error');
+      worker.terminate();
+      rec.worker  = null;
+      rec.status  = 'failed';
+      rec.error   = 'DOCX conversion timed out — document may be too complex.';
+      resolve(null);
+    }, SECURITY_LIMITS.maxConversionMs);
+
+    worker.onmessage = (e) => {
+      const msg = e.data;
+      if (msg.id !== id) return;
+      clearTimeout(timeout);
+      worker.terminate();
+      rec.worker = null;
+
+      if (msg.type === 'error') {
+        log(`Mammoth error: ${msg.message}`, 'error');
+        rec.status = 'failed';
+        rec.error  = 'DOCX could not be converted.';
+        resolve(null);
+        return;
+      }
+
+      // 3 — collect legal-document warnings from Mammoth messages
+      const warnings = (msg.messages || [])
+        .filter(m => m.type === 'warning')
+        .map(m => m.message);
+
+      const imageWarnings = warnings.filter(w => /image/i.test(w));
+      const changeWarnings = warnings.filter(w => /tracked.change|revision/i.test(w));
+      const otherWarnings = warnings.filter(w => !/image/i.test(w) && !/tracked.change|revision/i.test(w));
+
+      log(`Mammoth done — ${warnings.length} warning(s)`, warnings.length ? 'warn' : 'ok');
+
+      // 4 — sanitize HTML (no innerHTML, no eval — pure DOM manipulation)
+      log('Sanitizing DOCX HTML output…', 'info');
+      const cleanBody = sanitizeDocxHtml(msg.html || '');
+
+      // 5 — convert sanitized DOM to Markdown
+      log('Converting to Markdown…', 'info');
+      let markdown = domToMarkdown(cleanBody);
+
+      // 6 — prepend structured warnings
+      const warnLines = [];
+      if (changeWarnings.length) {
+        warnLines.push('> ⚠️ **Tracked changes detected.** This document contains revision marks that may not be fully reflected in the output. Review the original before use.');
+      }
+      if (imageWarnings.length) {
+        warnLines.push(`> 🖼️ **${imageWarnings.length} image(s) not included.** Embedded images cannot be converted to Markdown.`);
+      }
+      for (const w of otherWarnings) {
+        warnLines.push(`> ℹ️ ${w}`);
+      }
+      if (warnLines.length) {
+        markdown = warnLines.join('\n') + '\n\n' + markdown;
+      }
+
+      // 7 — prepend clipboard advisory for DOCX (same as scanned PDF)
+      const advisory = '> **Privacy note:** This Markdown was extracted from a DOCX file locally in your browser. ' +
+        "HeyMark's privacy guarantee does not extend to tools you paste this text into.";
+      markdown = advisory + '\n\n' + markdown;
+
+      resolve(markdown);
+    };
+
+    worker.onerror = (err) => {
+      clearTimeout(timeout);
+      rec.worker = null;
+      log(`DOCX worker error: ${err.message}`, 'error');
+      rec.status = 'failed';
+      rec.error  = 'DOCX worker failed unexpectedly.';
+      resolve(null);
+    };
+
+    worker.postMessage({ type: 'convert', id, buf }, [buf]);
+  });
+}
+
 function sanitizeMarkdownLinks(md) {
   return md.replace(/\[([^\]]*)\]\(([^)]*)\)/g, (match, text, url) => {
     const trimmed = url.trim();
@@ -520,12 +824,31 @@ async function convertFile(rec) {
     const buf = await readFileAsArrayBuffer(rec.file);
     log(`File read: ${buf.byteLength.toLocaleString()} bytes`, 'ok');
 
-    // validate magic bytes %PDF-
-    const magic = new Uint8Array(buf, 0, 5);
-    const isPDF = magic[0]===0x25 && magic[1]===0x50 && magic[2]===0x44 && magic[3]===0x46 && magic[4]===0x2D;
+    // format router — detect PDF or ZIP/DOCX by magic bytes
+    const magic = new Uint8Array(buf, 0, 8);
+    const isPDF  = magic[0]===0x25 && magic[1]===0x50 && magic[2]===0x44 && magic[3]===0x46 && magic[4]===0x2D;
+    const isZIP  = magic[0]===0x50 && magic[1]===0x4B && magic[2]===0x03 && magic[3]===0x04;
+
+    if (isZIP) {
+      log('Magic bytes: ZIP/DOCX — routing to DOCX pipeline', 'info');
+      const docxMarkdown = await convertDocx(rec, buf);
+      if (docxMarkdown !== null) {
+        const md = sanitizeMarkdownLinks(docxMarkdown);
+        rec.markdown = md.length > SECURITY_LIMITS.maxOutputChars
+          ? md.slice(0, SECURITY_LIMITS.maxOutputChars) + '\n\n[Output truncated — document too large]'
+          : md;
+        rec.status   = rec.markdown.trim() ? 'complete' : 'no-text';
+        rec.progress = 100;
+        log(`Done — status: ${rec.status}, output: ${rec.markdown.length} chars`, 'ok');
+      }
+      renderQueue();
+      updateActionsBar();
+      return;
+    }
+
     if (!isPDF) {
-      log('Magic bytes invalid — not a PDF', 'error');
-      rec.status = 'invalid-pdf';
+      log('Magic bytes invalid — unsupported format', 'error');
+      rec.status = 'invalid-format';
       renderQueue();
       updateActionsBar();
       return;

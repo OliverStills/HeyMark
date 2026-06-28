@@ -9,13 +9,14 @@
 import { test, expect } from '@playwright/test';
 import { resolve } from 'node:path';
 
-const TEXT_PDF = resolve('security-tests/fixtures/pdf/valid-text.pdf');
+const TEXT_PDF  = resolve('security-tests/fixtures/pdf/valid-text.pdf');
+const TEXT_DOCX = resolve('security-tests/fixtures/docx/valid-text.docx');
 
 // ── Shared helper ─────────────────────────────────────────────────────────────
 
-async function uploadAndConvert(page, pdfPath) {
+async function uploadAndConvert(page, filePath) {
   await page.goto('/');
-  await page.locator('#file-input').setInputFiles(pdfPath);
+  await page.locator('#file-input').setInputFiles(filePath);
   await page.locator('#file-queue').waitFor({ state: 'visible' });
   await page.locator('#actions-bar').waitFor({ state: 'visible' });
   await page.locator('#convert-all-btn').click();
@@ -43,6 +44,25 @@ test.describe('zero-egress', () => {
     expect(
       external,
       `External network requests detected:\n  ${external.join('\n  ')}`,
+    ).toHaveLength(0);
+  });
+
+  test('DOCX conversion makes no external requests', async ({ page }) => {
+    const external = [];
+
+    page.on('request', req => {
+      try {
+        const url = new URL(req.url());
+        if (url.protocol === 'blob:' || url.protocol === 'data:') return;
+        if (url.hostname !== 'localhost') external.push(req.url());
+      } catch {}
+    });
+
+    await uploadAndConvert(page, TEXT_DOCX);
+
+    expect(
+      external,
+      `External network requests during DOCX conversion:\n  ${external.join('\n  ')}`,
     ).toHaveLength(0);
   });
 
@@ -121,6 +141,19 @@ test.describe('storage isolation', () => {
       markdown,
       'Markdown output must not contain data:text/html URIs',
     ).not.toMatch(/\]\(data:text\/html/i);
+  });
+
+  test('DOCX with malicious hyperlink produces no javascript: in output', async ({ page }) => {
+    const MALICIOUS_DOCX = resolve('security-tests/fixtures/docx/malicious-link.docx');
+    await uploadAndConvert(page, MALICIOUS_DOCX);
+
+    const markdown = await page.evaluate(() =>
+      document.getElementById('raw-panel')?.textContent ?? '');
+
+    expect(
+      markdown,
+      'javascript: URI from DOCX hyperlink must be stripped from Markdown output',
+    ).not.toMatch(/javascript:/i);
   });
 
 });

@@ -1,5 +1,5 @@
 HeyMark — Third-Party Software Notices
-Version 1.1.0 · 2026-06-24
+Version 1.2.0 · 2026-06-27
 
 HeyMark vendors the following open-source libraries. Their license texts are
 reproduced below as required by the terms of each license.
@@ -75,11 +75,42 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 =============================================================================
-4. DOMPurify  (Apache License 2.0 and Mozilla Public License 2.0)
+4. Mammoth.js  (BSD 2-Clause License)
+   https://github.com/mwilliamson/mammoth.js
+   Version: 1.12.0
+   Vendored at: vendor/mammoth/
+=============================================================================
+
+Copyright (c) 2013, Michael Williamson
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
+THE POSSIBILITY OF SUCH DAMAGE.
+
+=============================================================================
+6. DOMPurify  (Apache License 2.0 and Mozilla Public License 2.0)
    https://github.com/cure53/DOMPurify
    Version: 3.2.4
    Vendored at: vendor/dompurify/
-   Note: vendored but NOT loaded at runtime in HeyMark v1.1.0+
 =============================================================================
 
 DOMPurify is released under the Apache license 2.0 and Mozilla Public
@@ -102,7 +133,7 @@ limitations under the License.
 Mozilla Public License, v. 2.0: https://mozilla.org/MPL/2.0/
 
 =============================================================================
-5. marked  (MIT License)
+7. marked  (MIT License)
    https://github.com/markedjs/marked
    Version: 15.0.12
    Vendored at: vendor/marked/
