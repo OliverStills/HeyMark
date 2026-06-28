@@ -761,11 +761,6 @@ async function convertDocx(rec, buf) {
         markdown = warnLines.join('\n') + '\n\n' + markdown;
       }
 
-      // 7 — prepend clipboard advisory for DOCX (same as scanned PDF)
-      const advisory = '> **Privacy note:** This Markdown was extracted from a DOCX file locally in your browser. ' +
-        "HeyMark's privacy guarantee does not extend to tools you paste this text into.";
-      markdown = advisory + '\n\n' + markdown;
-
       resolve(markdown);
     };
 
