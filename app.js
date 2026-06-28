@@ -151,7 +151,7 @@ function sanitizeFilename(raw) {
 }
 
 function nameWithoutExt(name) {
-  return name.replace(/\.pdf$/i, '');
+  return name.replace(/\.(pdf|docx)$/i, '');
 }
 
 let toastTimer = null;
