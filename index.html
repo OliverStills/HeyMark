@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>HeyMark — PDF to Markdown Converter</title>
-  <meta name="description" content="Convert PDFs to Markdown privately. All processing happens in your browser — your files never leave your device.">
+  <title>HeyMark — Document to Markdown Converter</title>
+  <meta name="description" content="Convert PDF and DOCX documents to Markdown privately. All processing happens in your browser — your files never leave your device.">
   <meta name="robots" content="index, follow">
 
   <!-- CSP — tightened for production; blob: required for pdf.js workers -->
@@ -35,7 +35,7 @@
     <span class="header-rule" aria-hidden="true">— ◆ —</span>
     <span class="wordmark">HEY<span class="accent">MARK</span></span>
     <span class="header-rule" aria-hidden="true">— ◆ —</span>
-    <span class="tagline">PDF to Markdown Converter</span>
+    <span class="tagline">Document to Markdown Converter</span>
     <div class="privacy-badge" role="status" aria-label="Privacy guarantee">
       <span class="lock-icon" aria-hidden="true">🔒</span>
       YOUR FILES NEVER LEAVE YOUR BROWSER
@@ -47,15 +47,7 @@
   <!-- ===== OPTIONS BAR ===== -->
   <section id="options-bar" aria-label="Conversion options">
 
-    <div class="toggle-group">
-      <label class="toggle-switch" title="Activate OCR for scanned PDFs">
-        <input type="checkbox" id="opt-ocr" role="switch" aria-checked="false">
-        <span class="toggle-track" aria-hidden="true"></span>
-      </label>
-      <span class="toggle-label" id="opt-ocr-label">OCR Mode</span>
-    </div>
-
-    <div class="toggle-group" id="ocr-lang-group" aria-label="OCR language">
+    <div class="toggle-group" id="ocr-lang-group" aria-label="OCR language" title="OCR language — only applies when OCR Mode is active (scanned PDFs only, not used for DOCX)">
       <label class="toggle-label" for="opt-lang">Language</label>
       <select id="opt-lang" class="options-select" aria-label="OCR language">
         <option value="eng">English</option>
@@ -69,6 +61,14 @@
         <option value="ces">Czech</option>
         <option value="vie">Vietnamese</option>
       </select>
+    </div>
+
+    <div class="toggle-group">
+      <label class="toggle-switch" title="Scanned PDFs only — enables Tesseract.js OCR for image-based PDFs. Not used for DOCX or text-based PDFs.">
+        <input type="checkbox" id="opt-ocr" role="switch" aria-checked="false">
+        <span class="toggle-track" aria-hidden="true"></span>
+      </label>
+      <span class="toggle-label" id="opt-ocr-label">OCR Mode</span>
     </div>
 
     <div class="toggle-group">
